@@ -2,9 +2,11 @@ package sync
 
 import "reflect"
 
+import "context"
+
 type Variable interface {
-	Get() any
-	Set(any) error
+	Get(ctx context.Context) (any, error)
+	Set(ctx context.Context, value any) error
 
 	IsDirty() bool
 	MarkClean()
@@ -16,14 +18,19 @@ type Variable interface {
 
 	OnChange(func(oldValue, newValue any))
 	OnConflict(func(local, remote any)) any
+
+	GetPermissions() Permissions
+	SetPermissions(Permissions)
+
+	GetHistory() []HistoryEntry
 }
 
 type TypedVariable[T any] interface {
 	SetRoot(Variable)
 	GetRoot() Variable
 
-	Set(T)
-	Get() T
+	Get(ctx context.Context) (T, error)
+	Set(ctx context.Context, value T) error
 
 	IsDirty() bool
 	MarkClean()
@@ -38,6 +45,23 @@ type TypedVariable[T any] interface {
 
 	GetType() reflect.Type
 	SetType(reflect.Type)
+
+	GetPermissions() Permissions
+	SetPermissions(Permissions)
+
+	GetHistory() []HistoryEntry
+}
+
+type Permissions struct {
+	Read  []string
+	Write []string
+}
+
+type HistoryEntry struct {
+	Version   uint64
+	Timestamp int64
+	Value     any
+	ClientID  string
 }
 
 type ConflictResolver interface {
