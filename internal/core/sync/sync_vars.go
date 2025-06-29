@@ -2,25 +2,23 @@ package sync
 
 import "reflect"
 
-import "context"
-
 type Variable interface {
-	Get(ctx context.Context) (any, error)
-	Set(ctx context.Context, value any) error
+	Get() (any, error)
+	Set(any) error
 
 	IsDirty() bool
 	MarkClean()
-	GetDelta() ([]byte, error)
-	ApplyDelta([]byte) error
+	GetDelta(sinceVersion uint64) ([]Delta, error)
+	ApplyDelta(...Delta) error
 
 	SetConflictResolver(ConflictResolver)
 	GetVersion() uint64
 
 	OnChange(func(oldValue, newValue any))
-	OnConflict(func(local, remote any)) any
+	OnConflict(func(local, remote any) any)
 
-	GetPermissions() Permissions
-	SetPermissions(Permissions)
+	GetPermissions() PermissionMask
+	SetPermissions(PermissionMask)
 
 	GetHistory() []HistoryEntry
 }
@@ -29,25 +27,25 @@ type TypedVariable[T any] interface {
 	SetRoot(Variable)
 	GetRoot() Variable
 
-	Get(ctx context.Context) (T, error)
-	Set(ctx context.Context, value T) error
+	Get() (T, error)
+	Set(T) error
 
 	IsDirty() bool
 	MarkClean()
-	GetDelta() ([]byte, error)
-	ApplyDelta([]byte) error
+	GetDelta(sinceVersion uint64) ([]Delta, error)
+	ApplyDelta(...Delta) error
 
 	SetConflictResolver(ConflictResolver)
 	GetVersion() uint64
 
 	OnChange(func(oldValue, newValue T))
-	OnConflict(func(local, remote T)) T
+	OnConflict(func(local, remote T) T)
 
 	GetType() reflect.Type
 	SetType(reflect.Type)
 
-	GetPermissions() Permissions
-	SetPermissions(Permissions)
+	GetPermissionMask() PermissionMask
+	SetPermissionMask(PermissionMask)
 
 	GetHistory() []HistoryEntry
 }
@@ -72,4 +70,18 @@ type TypedConflictResolver[T any] interface {
 	Resolve(local, remote T, metadata ConflictMetadata) T
 }
 
-type ConflictMetadata struct{}
+type ConflictMetadata map[string]any
+
+type Delta struct {
+	Version  uint64
+	Path     string
+	OldValue any
+	NewValue any
+}
+
+type TypedDelta[T any] struct {
+	Version  uint64
+	Path     string
+	OldValue T
+	NewValue any
+}

@@ -12,7 +12,18 @@ type StateManage interface {
 
 type (
 	Snapshot    interface{}
-	Delta       interface{}
 	SpatialArea struct{}
 	StateSubset struct{}
+)
+
+type PermissionMask uint8
+
+const (
+	PermissionRead  PermissionMask = 1 << iota
+	PermissionWrite PermissionMask = 1 << iota
+	PermissionCheck PermissionMask = 1 << iota
+
+	PermissionAdmin = PermissionRead |
+		PermissionWrite |
+		PermissionCheck<<iota
 )
