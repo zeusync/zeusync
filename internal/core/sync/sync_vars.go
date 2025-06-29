@@ -20,13 +20,12 @@ type Variable interface {
 	GetPermissions() PermissionMask
 	SetPermissions(PermissionMask)
 
+	GetType() reflect.Type
+
 	GetHistory() []HistoryEntry
 }
 
 type TypedVariable[T any] interface {
-	SetRoot(Variable)
-	GetRoot() Variable
-
 	Get() (T, error)
 	Set(T) error
 
@@ -40,9 +39,6 @@ type TypedVariable[T any] interface {
 
 	OnChange(func(oldValue, newValue T))
 	OnConflict(func(local, remote T) T)
-
-	GetType() reflect.Type
-	SetType(reflect.Type)
 
 	GetPermissionMask() PermissionMask
 	SetPermissionMask(PermissionMask)
@@ -73,10 +69,10 @@ type TypedConflictResolver[T any] interface {
 type ConflictMetadata map[string]any
 
 type Delta struct {
-	Version  uint64
-	Path     string
-	OldValue any
-	NewValue any
+	Version       uint64
+	Path          string
+	PreviousValue any
+	Value         any
 }
 
 type TypedDelta[T any] struct {
