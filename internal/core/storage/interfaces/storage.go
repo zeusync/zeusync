@@ -2,8 +2,9 @@ package interfaces
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/internal/core/models/interfaces"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/models/interfaces"
 )
 
 // Storage provides abstract data storage interface

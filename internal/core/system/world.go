@@ -1,8 +1,9 @@
 package system
 
 import (
-	"github.com/zeusync/zeusync/internal/core/models/interfaces"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/models/interfaces"
 )
 
 // World provides access to the game world state

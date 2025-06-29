@@ -2,8 +2,9 @@ package system
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/internal/core/models/interfaces"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/models/interfaces"
 )
 
 // System represents a game logic processor

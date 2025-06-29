@@ -47,19 +47,25 @@ type ClusterCoordinator interface {
 	SyncConfig() error
 }
 
-type ClusterMessage interface{}
-type NodeStatus struct{}
-type HealthStatus struct{}
-type LoadMetrics struct{}
+type (
+	ClusterMessage interface{}
+	NodeStatus     struct{}
+	HealthStatus   struct{}
+	LoadMetrics    struct{}
+)
 
 type ServiceInfo struct{}
 
 type SelectionCriteria interface{}
 
-type LoadContributionStrategy interface{}
-type ClusterHealthStatus struct{}
-type ClusterConfig struct{}
+type (
+	LoadContributionStrategy interface{}
+	ClusterHealthStatus      struct{}
+	ClusterConfig            struct{}
+)
 
-type Proposal interface{}
-type Vote interface{}
-type ConsensusResult struct{}
+type (
+	Proposal        interface{}
+	Vote            interface{}
+	ConsensusResult struct{}
+)

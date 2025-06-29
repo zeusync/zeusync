@@ -26,8 +26,10 @@ type Event interface {
 	Metadata() map[string]any
 }
 
-type EventHandler func(event Event) error
-type EventFilter func(event Event) bool
+type (
+	EventHandler func(event Event) error
+	EventFilter  func(event Event) bool
+)
 
 type Subscription interface {
 	ID() string
@@ -37,6 +39,8 @@ type Subscription interface {
 	Cancel() error
 }
 
-type TopicConfig struct{}
-type EventBusMetrics struct{}
-type TopicInfo struct{}
+type (
+	TopicConfig     struct{}
+	EventBusMetrics struct{}
+	TopicInfo       struct{}
+)

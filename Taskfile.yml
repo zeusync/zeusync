@@ -1,0 +1,16 @@
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task: build
+
+  fmt:
+    desc: 🧹 Cleaning all go code
+    cmds:
+      - gofumpt -l -w .
+
+  lint:
+    desc: 🚀 Command for linting code
+    cmds:
+      - golangci-lint run ./...

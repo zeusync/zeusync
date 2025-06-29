@@ -10,12 +10,14 @@ type MetricsCollector interface {
 	Export() ([]MetricsFamily, error)
 }
 
-type MetricsCallback func(name string, value float64, tags map[string]string)
-type MetricsFamily struct {
-	Name    string
-	Tags    map[string]string
-	Metrics []any
-}
+type (
+	MetricsCallback func(name string, value float64, tags map[string]string)
+	MetricsFamily   struct {
+		Name    string
+		Tags    map[string]string
+		Metrics []any
+	}
+)
 
 type Counter interface {
 	Inc()

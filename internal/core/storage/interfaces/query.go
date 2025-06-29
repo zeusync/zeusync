@@ -1,8 +1,9 @@
 package interfaces
 
 import (
-	"github.com/zeusync/zeusync/internal/core/models"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/models"
 )
 
 // Query interface for flexible data querying

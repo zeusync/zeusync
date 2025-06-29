@@ -10,7 +10,9 @@ type StateManage interface {
 	GetRelevantState(clientID string) (StateSubset, error)
 }
 
-type Snapshot interface{}
-type Delta interface{}
-type SpatialArea struct{}
-type StateSubset struct{}
+type (
+	Snapshot    interface{}
+	Delta       interface{}
+	SpatialArea struct{}
+	StateSubset struct{}
+)
