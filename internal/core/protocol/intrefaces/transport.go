@@ -1,22 +1,27 @@
 package intrefaces
 
 import (
-	"io"
 	"net"
+	"time"
 )
 
+// Transport provides low-level network transport
 type Transport interface {
-	Listen(address net.Addr) error
-	Accept() (Connection, error)
-	Dial(address net.Addr) (Connection, error)
-	io.Closer
-}
+	// Connection handling
 
-type Connection interface {
-	ID() string
-	RemoteAddr() string
-	Send([]byte) error
-	Receive() ([]byte, error)
-	io.Closer
-	IsAlive() bool
+	Listen(address string) error
+	Accept() (Connection, error)
+	Dial(address string) (Connection, error)
+	Close() error
+
+	// Configuration
+
+	SetKeepAlive(keepAlive bool) error
+	SetTimeout(timeout time.Duration) error
+	SetBufferSize(size int) error
+
+	// Status
+
+	LocalAddr() net.Addr
+	IsListening() bool
 }
