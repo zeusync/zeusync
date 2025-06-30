@@ -11,21 +11,25 @@ import (
 
 var _ sync.VariableAnalyzer = (*DefaultAnalyzer)(nil)
 
+// DefaultAnalyzer provides a default implementation of the sync.VariableAnalyzer.
+// It analyzes variable metrics to detect access patterns and recommend optimal storage strategies.
 type DefaultAnalyzer struct {
 	mu               sc.RWMutex
 	thresholds       AnalysisThresholds
 	migrationHistory map[string][]sync.MigrationEvent
 }
 
+// AnalysisThresholds defines the thresholds used for performance analysis.
 type AnalysisThresholds struct {
-	HighContentionRatio     float64 // > 0.1 means high contention
-	ReadHeavyRatio          float64 // > 10.0 means read-heavy
-	WriteHeavyRatio         float64 // < 0.1 means write-heavy
-	HighLatencyThreshold    time.Duration
-	MemoryPressureThreshold int64
-	MigrationCooldown       time.Duration
+	HighContentionRatio     float64       // Ratio of contention events to total operations
+	ReadHeavyRatio          float64       // Read/write ratio to be considered read-heavy
+	WriteHeavyRatio         float64       // Read/write ratio to be considered write-heavy
+	HighLatencyThreshold    time.Duration // Latency threshold for detecting performance issues
+	MemoryPressureThreshold int64         // Memory usage threshold for detecting memory pressure
+	MigrationCooldown       time.Duration // Cooldown period between migrations
 }
 
+// NewDefaultAnalyzer creates and initializes a new DefaultAnalyzer.
 func NewDefaultAnalyzer() *DefaultAnalyzer {
 	return &DefaultAnalyzer{
 		thresholds: AnalysisThresholds{
@@ -40,6 +44,7 @@ func NewDefaultAnalyzer() *DefaultAnalyzer {
 	}
 }
 
+// AnalyzeVariable performs a one-time analysis of a variable.
 func (a *DefaultAnalyzer) AnalyzeVariable(v sync.Variable) sync.AnalysisResult {
 	metrics := v.GetMetrics()
 	currentStrategy := v.GetStorageStrategy()
@@ -66,11 +71,30 @@ func (a *DefaultAnalyzer) AnalyzeVariable(v sync.Variable) sync.AnalysisResult {
 	}
 }
 
+// MonitorVariable continuously monitors a variable and sends analysis results to a channel.
 func (a *DefaultAnalyzer) MonitorVariable(ctx context.Context, v sync.Variable, interval time.Duration) <-chan sync.AnalysisResult {
-	// TODO: Implement monitoring logic
-	return nil
+	results := make(chan sync.AnalysisResult, 1)
+
+	go func() {
+		defer close(results)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				results <- a.AnalyzeVariable(v)
+			}
+		}
+	}()
+
+	return results
 }
 
+// DetectAccessPattern detects the access pattern of a variable based on its metrics.
 func (a *DefaultAnalyzer) DetectAccessPattern(metrics sync.VariableMetrics) sync.AccessPattern {
 	if metrics.ReadCount == 0 && metrics.WriteCount == 0 {
 		return sync.PatternRareAccess
@@ -90,6 +114,7 @@ func (a *DefaultAnalyzer) DetectAccessPattern(metrics sync.VariableMetrics) sync
 	}
 }
 
+// PredictOptimalStrategy predicts the optimal storage strategy for a variable based on its metrics.
 func (a *DefaultAnalyzer) PredictOptimalStrategy(metrics sync.VariableMetrics) sync.StorageStrategy {
 	pattern := a.DetectAccessPattern(metrics)
 
@@ -121,6 +146,7 @@ func (a *DefaultAnalyzer) PredictOptimalStrategy(metrics sync.VariableMetrics) s
 	}
 }
 
+// GetOptimizationSuggestions provides a list of optimization suggestions for a variable.
 func (a *DefaultAnalyzer) GetOptimizationSuggestions(v sync.Variable) []sync.OptimizationSuggestion {
 	metrics := v.GetMetrics()
 
@@ -133,6 +159,7 @@ func (a *DefaultAnalyzer) GetOptimizationSuggestions(v sync.Variable) []sync.Opt
 	return a.generateRecommendations(v, metrics, pattern, optimalStrategy)
 }
 
+// ShouldMigrate determines if a variable should be migrated to a different strategy.
 func (a *DefaultAnalyzer) ShouldMigrate(v sync.Variable) (bool, sync.StorageStrategy, string) {
 	result := a.AnalyzeVariable(v)
 	currentStrategy := v.GetStorageStrategy()

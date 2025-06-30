@@ -5,6 +5,8 @@ import (
 	"reflect"
 	sc "sync"
 
+	"github.com/zeusync/zeusync/internal/core/sync/metrics"
+
 	"github.com/zeusync/zeusync/internal/core/sync"
 	"github.com/zeusync/zeusync/internal/core/sync/analyzer"
 	"github.com/zeusync/zeusync/internal/core/sync/vars"
@@ -12,12 +14,16 @@ import (
 
 var _ sync.VariableFactory = (*DefaultVariableFactory)(nil)
 
+// DefaultVariableFactory provides a default implementation of the sync.VariableFactory.
+// It manages the creation of synchronized variables with various strategies.
 type DefaultVariableFactory struct {
-	strategies map[sync.StorageStrategy]sync.StrategyConstructor
-	analyzer   sync.VariableAnalyzer
-	mu         sc.RWMutex
+	strategies map[sync.StorageStrategy]sync.StrategyConstructor // Map of registered strategies
+	analyzer   sync.VariableAnalyzer                             // Analyzer for recommending strategies
+	mu         sc.RWMutex                                        // Mutex for thread-safe access to strategies
 }
 
+// NewVariableFactory creates and initializes a new DefaultVariableFactory.
+// It also registers the default synchronization strategies.
 func NewVariableFactory() *DefaultVariableFactory {
 	f := &DefaultVariableFactory{
 		strategies: make(map[sync.StorageStrategy]sync.StrategyConstructor),
@@ -25,15 +31,17 @@ func NewVariableFactory() *DefaultVariableFactory {
 	}
 
 	// Register default strategies
-	f.RegisterStrategy(string(sync.StrategyAtomic), f.createAtomicVariable)
-	f.RegisterStrategy(string(sync.StrategyMutex), f.createMutexVariable)
-	f.RegisterStrategy(string(sync.StrategySharded), f.createShardedVariable)
-	f.RegisterStrategy(string(sync.StrategyReadOptimized), f.createReadOptimizedVariable)
-	f.RegisterStrategy(string(sync.StrategyWriteOptimized), f.createWriteOptimizedVariable)
+	f.RegisterStrategy(sync.StrategyAtomic, f.createAtomicVariable)
+	f.RegisterStrategy(sync.StrategyMutex, f.createMutexVariable)
+	f.RegisterStrategy(sync.StrategySharded, f.createShardedVariable)
+	f.RegisterStrategy(sync.StrategyReadOptimized, f.createReadOptimizedVariable)
+	f.RegisterStrategy(sync.StrategyWriteOptimized, f.createWriteOptimizedVariable)
 
 	return f
 }
 
+// Create creates a new synchronized variable with an automatically selected strategy.
+// It analyzes the initial value and access pattern to choose the most optimal strategy.
 func (f *DefaultVariableFactory) Create(initialValue any, options ...sync.VariableOption) (sync.Variable, error) {
 	config := f.buildConfig(options...)
 
@@ -45,6 +53,7 @@ func (f *DefaultVariableFactory) Create(initialValue any, options ...sync.Variab
 	return f.CreateWithStrategy(config.StorageStrategy, initialValue, options...)
 }
 
+// CreateWithStrategy creates a new synchronized variable with a specified strategy.
 func (f *DefaultVariableFactory) CreateWithStrategy(strategy sync.StorageStrategy, initialValue any, options ...sync.VariableOption) (sync.Variable, error) {
 	config := f.buildConfig(options...)
 	config.StorageStrategy = strategy
@@ -69,30 +78,42 @@ func (f *DefaultVariableFactory) CreateWithStrategy(strategy sync.StorageStrateg
 
 	// Wrap with metrics if enabled
 	if config.EnableMetrics {
-		// variable = sync.NewMetricsWrapper(variable)
+		variable = metrics.NewMetricsWrapper(variable)
 	}
 
 	return variable, nil
 }
 
+// CreateOptimized creates a new synchronized variable optimized for a specific access pattern.
 func (f *DefaultVariableFactory) CreateOptimized(initialValue any, expectedPattern sync.AccessPattern, options ...sync.VariableOption) (sync.Variable, error) {
 	strategy := f.selectOptimalStrategy(initialValue, expectedPattern)
 	return f.CreateWithStrategy(strategy, initialValue, options...)
 }
 
-func (f *DefaultVariableFactory) RegisterStrategy(name string, constructor sync.StrategyConstructor) {
-	// TODO implement me
-	panic("implement me")
+// RegisterStrategy registers a new synchronization strategy.
+func (f *DefaultVariableFactory) RegisterStrategy(strategy sync.StorageStrategy, constructor sync.StrategyConstructor) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.strategies[strategy] = constructor
 }
 
+// ListStrategies returns a list of all registered strategy names.
 func (f *DefaultVariableFactory) ListStrategies() []string {
-	// TODO implement me
-	panic("implement me")
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	strategies := make([]string, 0, len(f.strategies))
+	for name := range f.strategies {
+		strategies = append(strategies, string(name))
+	}
+
+	return strategies
 }
 
+// GetRecommendedStrategy recommends a storage strategy based on the value type and access pattern.
 func (f *DefaultVariableFactory) GetRecommendedStrategy(valueType reflect.Type, pattern sync.AccessPattern) sync.StorageStrategy {
-	// TODO implement me
-	panic("implement me")
+	return f.selectOptimalStrategy(reflect.Zero(valueType).Interface(), pattern)
 }
 
 func (f *DefaultVariableFactory) selectOptimalStrategy(value any, pattern sync.AccessPattern) sync.StorageStrategy {

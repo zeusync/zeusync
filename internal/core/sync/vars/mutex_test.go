@@ -2,10 +2,11 @@ package vars
 
 import (
 	"fmt"
-	"github.com/zeusync/zeusync/internal/core/sync"
 	"math/rand/v2"
 	sc "sync"
 	"testing"
+
+	"github.com/zeusync/zeusync/internal/core/sync"
 
 	"github.com/stretchr/testify/require"
 )

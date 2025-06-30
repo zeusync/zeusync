@@ -2,9 +2,10 @@ package vars
 
 import (
 	"fmt"
-	"github.com/zeusync/zeusync/internal/core/sync"
 	"math/rand/v2"
 	"testing"
+
+	"github.com/zeusync/zeusync/internal/core/sync"
 )
 
 // Оптимизированные бенчмарки
@@ -20,7 +21,7 @@ func Benchmark_AtomicVariable(b *testing.B) {
 		b.ReportAllocs()
 
 		for i := 0; i < b.N; i++ {
-			_ = v.Set(i) // Избегаем умножения
+			_ = v.Set(i)
 		}
 	})
 
@@ -32,11 +33,51 @@ func Benchmark_AtomicVariable(b *testing.B) {
 
 		v := NewAtomicVariable(cfg)
 
-		// Предварительно сгенерированные значения для избежания rand в горячем пути
 		const poolSize = 1000
 		values := make([]int, poolSize)
 		for i := range values {
 			values[i] = rand.IntN(1000000)
+		}
+
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		b.RunParallel(func(pb *testing.PB) {
+			i := 0
+			for pb.Next() {
+				_ = v.Set(values[i%poolSize])
+				i++
+			}
+		})
+	})
+
+	b.Run("AtomicInt: Mode: Sync | History: None", func(b *testing.B) {
+		cfg := sync.VariableConfig{
+			MaxHistory:    0,
+			EnableHistory: false,
+		}
+
+		v := NewInt(cfg)
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			_ = v.Set(int64(i))
+		}
+	})
+
+	b.Run("AtomicInt: Mode: Async | History: None", func(b *testing.B) {
+		cfg := sync.VariableConfig{
+			MaxHistory:    0,
+			EnableHistory: false,
+		}
+
+		v := NewInt(cfg)
+
+		const poolSize = 1_000
+		values := make([]int64, poolSize)
+		for i := range values {
+			values[i] = rand.Int64N(1_000_000)
 		}
 
 		b.ResetTimer()
