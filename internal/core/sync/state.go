@@ -16,14 +16,12 @@ type (
 	StateSubset struct{}
 )
 
-type PermissionMask uint8
+type PermissionMask uint16
 
 const (
-	PermissionRead  PermissionMask = 1 << iota
-	PermissionWrite PermissionMask = 1 << iota
-	PermissionCheck PermissionMask = 1 << iota
-
-	PermissionAdmin = PermissionRead |
-		PermissionWrite |
-		PermissionCheck<<iota
+	PermissionRead PermissionMask = 1 << iota
+	PermissionWrite
+	PermissionDelete
+	PermissionMigrate
+	PermissionAdmin
 )

@@ -1,6 +1,7 @@
 package vars
 
 import (
+	"encoding/binary"
 	"errors"
 	"reflect"
 	"sort"
@@ -11,9 +12,9 @@ import (
 	"github.com/zeusync/zeusync/internal/core/sync"
 )
 
-var _ sync.Variable = (*SyncVarV2)(nil)
+var _ sync.Variable = (*Atomic)(nil)
 
-type SyncVarV2 struct {
+type Atomic struct {
 	valueMu   sc.RWMutex
 	historyMu sc.Mutex
 
@@ -24,43 +25,59 @@ type SyncVarV2 struct {
 	permissionMask sync.PermissionMask
 	history        []sync.Delta
 	historyIndex   int
+	maxHistory     uint8
+	enabledHistory bool
+
+	storageStrategy sync.StorageStrategy
+
+	enabledMetrics bool
+	tll            time.Duration
 
 	onChange         atomic.Pointer[func(old, new any)]
 	onConflict       atomic.Pointer[func(local, remote any) any]
 	conflictResolver atomic.Pointer[sync.ConflictResolver]
 
-	maxHistory uint8
+	tags map[string]string
 }
 
-func NewSyncVarV2(initialValue any, maxHistory uint8) *SyncVarV2 {
-	s := &SyncVarV2{
-		maxHistory: maxHistory,
+func NewAtomicVariable(cfg sync.VariableConfig) *Atomic {
+	v := &Atomic{
+		maxHistory:      cfg.MaxHistory,
+		permissionMask:  cfg.Permissions,
+		storageStrategy: cfg.StorageStrategy,
+		enabledMetrics:  cfg.EnableMetrics,
+		enabledHistory:  cfg.EnableHistory,
+		tll:             cfg.TTL,
+		tags:            cfg.Tags,
 	}
 
-	s.value.Store(initialValue)
-	s.version.Store(1)
-
-	if maxHistory > 0 {
-		s.history = make([]sync.Delta, maxHistory)
+	if cfg.ConflictResolver != nil {
+		v.conflictResolver.Store(&cfg.ConflictResolver)
 	}
 
-	return s
+	v.version.Store(1)
+
+	if v.enabledHistory {
+		v.history = make([]sync.Delta, v.maxHistory)
+	}
+
+	return v
 }
 
-func (s *SyncVarV2) Get() (any, error) {
-	return s.value.Load(), nil
+func (v *Atomic) Get() (any, error) {
+	return v.value.Load(), nil
 }
 
-func (s *SyncVarV2) Set(newValue any) error {
-	if !checkPermissions(sync.PermissionWrite, s.getPermissionMask()) {
+func (v *Atomic) Set(newValue any) error {
+	if !checkPermissions(sync.PermissionWrite, v.getPermissionMask()) {
 		return errors.New("permission denied")
 	}
 
-	oldValue := s.value.Load()
+	oldValue := v.value.Load()
 
 	if fastEqual(oldValue, newValue) {
-		resolver := s.conflictResolver.Load()
-		onConflictFunc := s.onConflict.Load()
+		resolver := v.conflictResolver.Load()
+		onConflictFunc := v.onConflict.Load()
 
 		if resolver != nil {
 			newValue = (*resolver).Resolve(oldValue, newValue, make(map[string]any))
@@ -71,61 +88,61 @@ func (s *SyncVarV2) Set(newValue any) error {
 		}
 	}
 
-	s.value.Store(newValue)
-	newVersion := s.version.Add(1)
-	s.dirty.Store(true)
+	v.value.Store(newValue)
+	newVersion := v.version.Add(1)
+	v.dirty.Store(true)
 
-	if s.maxHistory > 0 {
-		s.updateHistory(sync.Delta{
+	if v.maxHistory > 0 {
+		v.updateHistory(sync.Delta{
 			Version:       newVersion,
 			PreviousValue: oldValue,
 			Value:         newValue,
 		})
 	}
 
-	if onChangeFunc := s.onChange.Load(); onChangeFunc != nil {
+	if onChangeFunc := v.onChange.Load(); onChangeFunc != nil {
 		go (*onChangeFunc)(oldValue, newValue)
 	}
 
 	return nil
 }
 
-func (s *SyncVarV2) updateHistory(delta sync.Delta) {
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
+func (v *Atomic) updateHistory(delta sync.Delta) {
+	v.historyMu.Lock()
+	defer v.historyMu.Unlock()
 
-	if len(s.history) == 0 {
+	if len(v.history) == 0 {
 		return
 	}
 
 	// Кольцевой буфер
-	s.history[s.historyIndex] = delta
-	s.historyIndex = (s.historyIndex + 1) % len(s.history)
+	v.history[v.historyIndex] = delta
+	v.historyIndex = (v.historyIndex + 1) % len(v.history)
 }
 
-func (s *SyncVarV2) IsDirty() bool {
-	return s.dirty.Load()
+func (v *Atomic) IsDirty() bool {
+	return v.dirty.Load()
 }
 
-func (s *SyncVarV2) MarkClean() {
-	s.dirty.Store(false)
+func (v *Atomic) MarkClean() {
+	v.dirty.Store(false)
 }
 
-func (s *SyncVarV2) GetDelta(sinceVersion uint64) ([]sync.Delta, error) {
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
+func (v *Atomic) GetDelta(sinceVersion uint64) ([]sync.Delta, error) {
+	v.historyMu.Lock()
+	defer v.historyMu.Unlock()
 
-	if s.history == nil {
+	if v.history == nil {
 		return nil, errors.New("history is empty")
 	}
 
-	currentVersion := s.version.Load()
+	currentVersion := v.version.Load()
 	if sinceVersion >= currentVersion {
 		return nil, nil
 	}
 
 	var deltas []sync.Delta
-	for _, d := range s.history {
+	for _, d := range v.history {
 		if d.Version > sinceVersion && d.Version != 0 {
 			deltas = append(deltas, d)
 		}
@@ -134,7 +151,7 @@ func (s *SyncVarV2) GetDelta(sinceVersion uint64) ([]sync.Delta, error) {
 	return deltas, nil
 }
 
-func (s *SyncVarV2) ApplyDelta(deltas ...sync.Delta) error {
+func (v *Atomic) ApplyDelta(deltas ...sync.Delta) error {
 	if len(deltas) == 0 {
 		return errors.New("no deltas provided")
 	}
@@ -143,82 +160,102 @@ func (s *SyncVarV2) ApplyDelta(deltas ...sync.Delta) error {
 		return deltas[i].Version < deltas[j].Version
 	})
 
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
+	v.historyMu.Lock()
+	defer v.historyMu.Unlock()
 
-	if s.maxHistory > 0 {
+	if v.maxHistory > 0 {
 		for _, delta := range deltas {
-			s.history[s.historyIndex] = delta
-			s.historyIndex = (s.historyIndex + 1) % len(s.history)
+			v.history[v.historyIndex] = delta
+			v.historyIndex = (v.historyIndex + 1) % len(v.history)
 		}
 	}
 
 	return nil
 }
 
-func (s *SyncVarV2) SetConflictResolver(resolver sync.ConflictResolver) {
-	s.conflictResolver.Store(&resolver)
+func (v *Atomic) SetConflictResolver(resolver sync.ConflictResolver) {
+	v.conflictResolver.Store(&resolver)
 }
 
-func (s *SyncVarV2) GetVersion() uint64 {
-	return s.version.Load()
+func (v *Atomic) GetVersion() uint64 {
+	return v.version.Load()
 }
 
-func (s *SyncVarV2) OnChange(eventHandler func(oldValue any, newValue any)) {
-	s.onChange.Store(&eventHandler)
+func (v *Atomic) OnChange(eventHandler func(oldValue any, newValue any)) {
+	v.onChange.Store(&eventHandler)
 }
 
-func (s *SyncVarV2) OnConflict(eventHandler func(local any, remote any) any) {
-	s.onConflict.Store(&eventHandler)
+func (v *Atomic) OnConflict(eventHandler func(local any, remote any) any) {
+	v.onConflict.Store(&eventHandler)
 }
 
-func (s *SyncVarV2) GetPermissions() sync.PermissionMask {
-	return s.getPermissionMask()
+func (v *Atomic) GetPermissions() sync.PermissionMask {
+	return v.getPermissionMask()
 }
 
-func (s *SyncVarV2) SetPermissions(mask sync.PermissionMask) {
-	s.valueMu.Lock()
-	defer s.valueMu.Unlock()
-	s.permissionMask = mask
+func (v *Atomic) SetPermissions(mask sync.PermissionMask) {
+	v.valueMu.Lock()
+	defer v.valueMu.Unlock()
+	v.permissionMask = mask
 }
 
-func (s *SyncVarV2) getPermissionMask() sync.PermissionMask {
-	s.valueMu.RLock()
-	defer s.valueMu.RUnlock()
-	return s.permissionMask
+func (v *Atomic) GetMetrics() sync.VariableMetrics {
+	return sync.VariableMetrics{}
 }
 
-func (s *SyncVarV2) GetType() reflect.Type {
-	return reflect.TypeOf(s.value.Load())
+func (v *Atomic) GetStorageStrategy() sync.StorageStrategy {
+	return v.storageStrategy
 }
 
-func (s *SyncVarV2) GetHistory() []sync.HistoryEntry {
+func (v *Atomic) CanMigrateTo(strategy sync.StorageStrategy) bool {
+	return false
+}
+
+func (v *Atomic) GetType() reflect.Type {
+	return reflect.TypeOf(v.value.Load())
+}
+
+func (v *Atomic) GetHistory() []sync.HistoryEntry {
 	return []sync.HistoryEntry{
 		{
-			Version:   s.version.Load(),
+			Version:   v.version.Load(),
 			Timestamp: time.Now().UnixNano(),
-			Value:     s.value.Load(),
+			Value:     v.value.Load(),
 			ClientID:  "unknown",
 		},
 	}
 }
 
-var _ sync.TypedVariable[any] = (*TypedSyncVarV2[any])(nil)
-
-// TypedSyncVarV2 is a generic implementation of sync.TypedVariable[T]
-// This implementation provides basic synchronization and versioning for any type T.
-// It also provides methods for setting and getting the value, checking if the value is dirty,
-type TypedSyncVarV2[T any] struct {
-	root *SyncVarV2
+func (v *Atomic) Close() error {
+	return nil
 }
 
-func NewTypedSyncVarV2[T any](initialValue T, maxHistory uint8) *TypedSyncVarV2[T] {
-	return &TypedSyncVarV2[T]{
-		root: NewSyncVarV2(initialValue, maxHistory),
+func (v *Atomic) Size() int64 {
+	return int64(binary.Size(v.value.Load()))
+}
+
+func (v *Atomic) getPermissionMask() sync.PermissionMask {
+	v.valueMu.RLock()
+	defer v.valueMu.RUnlock()
+	return v.permissionMask
+}
+
+var _ sync.TypedVariable[any] = (*AtomicTyped[any])(nil)
+
+// AtomicTyped is a generic implementation of sync.TypedVariable[T]
+// This implementation provides basic synchronization and versioning for any type T.
+// It also provides methods for setting and getting the value, checking if the value is dirty,
+type AtomicTyped[T any] struct {
+	root *Atomic
+}
+
+func NewAtomicTypedVariable[T any](cfg sync.VariableConfig) *AtomicTyped[T] {
+	return &AtomicTyped[T]{
+		root: NewAtomicVariable(cfg),
 	}
 }
 
-func (v *TypedSyncVarV2[T]) Get() (T, error) {
+func (v *AtomicTyped[T]) Get() (T, error) {
 	val := v.root.value.Load()
 	if typed, ok := val.(T); ok {
 		return typed, nil
@@ -228,35 +265,35 @@ func (v *TypedSyncVarV2[T]) Get() (T, error) {
 	return zero, errors.New("type mismatch")
 }
 
-func (v *TypedSyncVarV2[T]) Set(newValue T) error {
+func (v *AtomicTyped[T]) Set(newValue T) error {
 	return v.root.Set(newValue)
 }
 
-func (v *TypedSyncVarV2[T]) IsDirty() bool {
+func (v *AtomicTyped[T]) IsDirty() bool {
 	return v.root.IsDirty()
 }
 
-func (v *TypedSyncVarV2[T]) MarkClean() {
+func (v *AtomicTyped[T]) MarkClean() {
 	v.root.MarkClean()
 }
 
-func (v *TypedSyncVarV2[T]) GetDelta(sinceVersion uint64) ([]sync.Delta, error) {
+func (v *AtomicTyped[T]) GetDelta(sinceVersion uint64) ([]sync.Delta, error) {
 	return v.root.GetDelta(sinceVersion)
 }
 
-func (v *TypedSyncVarV2[T]) ApplyDelta(delta ...sync.Delta) error {
+func (v *AtomicTyped[T]) ApplyDelta(delta ...sync.Delta) error {
 	return v.root.ApplyDelta(delta...)
 }
 
-func (v *TypedSyncVarV2[T]) SetConflictResolver(resolver sync.ConflictResolver) {
+func (v *AtomicTyped[T]) SetConflictResolver(resolver sync.ConflictResolver) {
 	v.root.SetConflictResolver(resolver)
 }
 
-func (v *TypedSyncVarV2[T]) GetVersion() uint64 {
+func (v *AtomicTyped[T]) GetVersion() uint64 {
 	return v.root.GetVersion()
 }
 
-func (v *TypedSyncVarV2[T]) OnChange(eventHandler func(oldValue T, newValue T)) {
+func (v *AtomicTyped[T]) OnChange(eventHandler func(oldValue T, newValue T)) {
 	v.root.OnChange(func(oldValue, newValue any) {
 		if oldTyped, fOk := oldValue.(T); fOk {
 			if newTyped, sOk := newValue.(T); sOk {
@@ -266,7 +303,7 @@ func (v *TypedSyncVarV2[T]) OnChange(eventHandler func(oldValue T, newValue T)) 
 	})
 }
 
-func (v *TypedSyncVarV2[T]) OnConflict(eventHandler func(local T, remote T) T) {
+func (v *AtomicTyped[T]) OnConflict(eventHandler func(local T, remote T) T) {
 	v.root.OnConflict(func(local, remote any) any {
 		if localTyped, fOk := local.(T); fOk {
 			if remoteTyped, sOk := remote.(T); sOk {
@@ -277,14 +314,38 @@ func (v *TypedSyncVarV2[T]) OnConflict(eventHandler func(local T, remote T) T) {
 	})
 }
 
-func (v *TypedSyncVarV2[T]) GetPermissionMask() sync.PermissionMask {
+func (v *AtomicTyped[T]) GetPermissions() sync.PermissionMask {
 	return v.root.GetPermissions()
 }
 
-func (v *TypedSyncVarV2[T]) SetPermissionMask(mask sync.PermissionMask) {
+func (v *AtomicTyped[T]) SetPermissions(mask sync.PermissionMask) {
 	v.root.SetPermissions(mask)
 }
 
-func (v *TypedSyncVarV2[T]) GetHistory() []sync.HistoryEntry {
+func (v *AtomicTyped[T]) GetMetrics() sync.VariableMetrics {
+	return sync.VariableMetrics{}
+}
+
+func (v *AtomicTyped[T]) GetStorageStrategy() sync.StorageStrategy {
+	return sync.StrategyAtomic
+}
+
+func (v *AtomicTyped[T]) CanMigrateTo(strategy sync.StorageStrategy) bool {
+	return false
+}
+
+func (v *AtomicTyped[T]) AsUntyped() sync.Variable {
+	return v.root
+}
+
+func (v *AtomicTyped[T]) GetHistory() []sync.HistoryEntry {
 	return v.root.GetHistory()
+}
+
+func (v *AtomicTyped[T]) Close() error {
+	return nil
+}
+
+func (v *AtomicTyped[T]) Size() int64 {
+	return int64(binary.Size(v.root.value.Load()))
 }

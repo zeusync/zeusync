@@ -1,7 +1,7 @@
 package vars
 
 import (
-	"encoding/gob"
+	"encoding/binary"
 	"errors"
 	"reflect"
 	"sort"
@@ -25,47 +25,63 @@ type Mutex struct {
 	permissionMask sync.PermissionMask
 	history        []sync.Delta
 	historyIndex   int
+	maxHistory     uint8
+	enabledHistory bool
+
+	storageStrategy sync.StorageStrategy
+
+	enabledMetrics bool
+	tll            time.Duration
 
 	onChange         atomic.Pointer[func(old, new any)]
 	onConflict       atomic.Pointer[func(local, remote any) any]
 	conflictResolver atomic.Pointer[sync.ConflictResolver]
 
-	maxHistory uint8
+	tags map[string]string
 }
 
-func NewMutex(initialValue any, maxHistory uint8) *Mutex {
-	s := &Mutex{
-		value:      initialValue,
-		maxHistory: maxHistory,
+func NewMutexVariable(cfg sync.VariableConfig) *Mutex {
+	v := &Mutex{
+		maxHistory:      cfg.MaxHistory,
+		permissionMask:  cfg.Permissions,
+		storageStrategy: cfg.StorageStrategy,
+		enabledMetrics:  cfg.EnableMetrics,
+		enabledHistory:  cfg.EnableHistory,
+		tll:             cfg.TTL,
+		tags:            cfg.Tags,
 	}
 
-	s.version.Store(1)
-
-	if maxHistory > 0 {
-		s.history = make([]sync.Delta, maxHistory)
+	if cfg.ConflictResolver != nil {
+		v.conflictResolver.Store(&cfg.ConflictResolver)
 	}
 
-	return s
+	v.version.Store(1)
+
+	if v.enabledHistory {
+		v.history = make([]sync.Delta, v.maxHistory)
+	}
+
+	return v
 }
 
-func (s *Mutex) Get() (any, error) {
-	s.valueMu.RLock()
-	defer s.valueMu.RUnlock()
-	return s.value, nil
+func (v *Mutex) Get() (any, error) {
+	v.valueMu.RLock()
+	defer v.valueMu.RUnlock()
+	return v.value, nil
 }
 
-func (s *Mutex) Set(newValue any) error {
-	if !checkPermissions(sync.PermissionWrite, s.getPermissionMask()) {
+func (v *Mutex) Set(newValue any) error {
+	if !checkPermissions(sync.PermissionWrite, v.getPermissionMask()) {
 		return errors.New("permission denied")
 	}
 
-	s.valueMu.Lock()
-	defer s.valueMu.Unlock()
+	v.valueMu.Lock()
+	defer v.valueMu.Unlock()
 
-	oldValue := s.value
+	oldValue := v.value
 	if fastEqual(oldValue, newValue) {
-		resolver := s.conflictResolver.Load()
-		onConflictFunc := s.onConflict.Load()
+		resolver := v.conflictResolver.Load()
+		onConflictFunc := v.onConflict.Load()
 
 		if resolver != nil {
 			newValue = (*resolver).Resolve(oldValue, newValue, make(map[string]any))
@@ -76,70 +92,70 @@ func (s *Mutex) Set(newValue any) error {
 		}
 	}
 
-	s.value = newValue
-	newVersion := s.version.Add(1)
-	s.dirty = true
+	v.value = newValue
+	newVersion := v.version.Add(1)
+	v.dirty = true
 
-	if s.maxHistory > 0 {
-		s.updateHistory(sync.Delta{
+	if v.maxHistory > 0 {
+		v.updateHistory(sync.Delta{
 			Version:       newVersion,
 			PreviousValue: oldValue,
 			Value:         newValue,
 		})
 	}
 
-	if onChangeFunc := s.onChange.Load(); onChangeFunc != nil {
+	if onChangeFunc := v.onChange.Load(); onChangeFunc != nil {
 		go (*onChangeFunc)(oldValue, newValue)
 	}
 
 	return nil
 }
 
-func (s *Mutex) updateHistory(delta sync.Delta) {
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
+func (v *Mutex) updateHistory(delta sync.Delta) {
+	v.historyMu.Lock()
+	defer v.historyMu.Unlock()
 
-	if len(s.history) == 0 {
+	if len(v.history) == 0 {
 		return
 	}
 
-	s.history[s.historyIndex] = delta
-	s.historyIndex = (s.historyIndex + 1) % len(s.history)
+	v.history[v.historyIndex] = delta
+	v.historyIndex = (v.historyIndex + 1) % len(v.history)
 }
 
-func (s *Mutex) getPermissionMask() sync.PermissionMask {
-	s.valueMu.RLock()
-	defer s.valueMu.RUnlock()
-	return s.permissionMask
+func (v *Mutex) getPermissionMask() sync.PermissionMask {
+	v.valueMu.RLock()
+	defer v.valueMu.RUnlock()
+	return v.permissionMask
 }
 
-func (s *Mutex) IsDirty() bool {
-	s.valueMu.RLock()
-	defer s.valueMu.RUnlock()
-	return s.dirty
+func (v *Mutex) IsDirty() bool {
+	v.valueMu.RLock()
+	defer v.valueMu.RUnlock()
+	return v.dirty
 }
 
-func (s *Mutex) MarkClean() {
-	s.valueMu.Lock()
-	defer s.valueMu.Unlock()
-	s.dirty = false
+func (v *Mutex) MarkClean() {
+	v.valueMu.Lock()
+	defer v.valueMu.Unlock()
+	v.dirty = false
 }
 
-func (s *Mutex) GetDelta(sinceVersion uint64) ([]sync.Delta, error) {
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
+func (v *Mutex) GetDelta(sinceVersion uint64) ([]sync.Delta, error) {
+	v.historyMu.Lock()
+	defer v.historyMu.Unlock()
 
-	if s.history == nil {
+	if v.history == nil {
 		return nil, errors.New("history is empty")
 	}
 
-	currentVersion := s.version.Load()
+	currentVersion := v.version.Load()
 	if sinceVersion >= currentVersion {
 		return nil, nil
 	}
 
 	var deltas []sync.Delta
-	for _, d := range s.history {
+	for _, d := range v.history {
 		if d.Version > sinceVersion && d.Version != 0 {
 			deltas = append(deltas, d)
 		}
@@ -148,7 +164,7 @@ func (s *Mutex) GetDelta(sinceVersion uint64) ([]sync.Delta, error) {
 	return deltas, nil
 }
 
-func (s *Mutex) ApplyDelta(deltas ...sync.Delta) error {
+func (v *Mutex) ApplyDelta(deltas ...sync.Delta) error {
 	if len(deltas) == 0 {
 		return errors.New("no deltas provided")
 	}
@@ -157,67 +173,87 @@ func (s *Mutex) ApplyDelta(deltas ...sync.Delta) error {
 		return deltas[i].Version < deltas[j].Version
 	})
 
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
+	v.historyMu.Lock()
+	defer v.historyMu.Unlock()
 
-	if s.maxHistory > 0 {
+	if v.maxHistory > 0 {
 		for _, delta := range deltas {
-			s.history[s.historyIndex] = delta
-			s.historyIndex = (s.historyIndex + 1) % len(s.history)
+			v.history[v.historyIndex] = delta
+			v.historyIndex = (v.historyIndex + 1) % len(v.history)
 		}
 	}
 
-	s.valueMu.Lock()
-	s.valueMu.Unlock()
+	v.valueMu.Lock()
+	v.valueMu.Unlock()
 	lastDelta := deltas[len(deltas)-1]
-	if lastDelta.Version > s.version.Load() {
-		s.value = lastDelta.Value
+	if lastDelta.Version > v.version.Load() {
+		v.value = lastDelta.Value
 	}
 
 	return nil
 }
 
-func (s *Mutex) SetConflictResolver(resolver sync.ConflictResolver) {
-	s.conflictResolver.Store(&resolver)
+func (v *Mutex) SetConflictResolver(resolver sync.ConflictResolver) {
+	v.conflictResolver.Store(&resolver)
 }
 
-func (s *Mutex) GetVersion() uint64 {
-	return s.version.Load()
+func (v *Mutex) GetVersion() uint64 {
+	return v.version.Load()
 }
 
-func (s *Mutex) OnChange(eventHandler func(oldValue any, newValue any)) {
-	s.onChange.Store(&eventHandler)
+func (v *Mutex) OnChange(eventHandler func(oldValue any, newValue any)) {
+	v.onChange.Store(&eventHandler)
 }
 
-func (s *Mutex) OnConflict(eventHandler func(local any, remote any) any) {
-	s.onConflict.Store(&eventHandler)
+func (v *Mutex) OnConflict(eventHandler func(local any, remote any) any) {
+	v.onConflict.Store(&eventHandler)
 }
 
-func (s *Mutex) GetPermissions() sync.PermissionMask {
-	return s.getPermissionMask()
+func (v *Mutex) GetPermissions() sync.PermissionMask {
+	return v.getPermissionMask()
 }
 
-func (s *Mutex) SetPermissions(mask sync.PermissionMask) {
-	s.valueMu.Lock()
-	s.permissionMask = mask
-	s.valueMu.Unlock()
+func (v *Mutex) SetPermissions(mask sync.PermissionMask) {
+	v.valueMu.Lock()
+	v.permissionMask = mask
+	v.valueMu.Unlock()
 }
 
-func (s *Mutex) GetType() reflect.Type {
-	return reflect.TypeOf(s.value)
+func (v *Mutex) GetMetrics() sync.VariableMetrics {
+	return sync.VariableMetrics{}
 }
 
-func (s *Mutex) GetHistory() []sync.HistoryEntry {
-	s.valueMu.RLock()
-	defer s.valueMu.RUnlock()
+func (v *Mutex) GetStorageStrategy() sync.StorageStrategy {
+	return v.storageStrategy
+}
+
+func (v *Mutex) CanMigrateTo(strategy sync.StorageStrategy) bool {
+	return false
+}
+
+func (v *Mutex) GetType() reflect.Type {
+	return reflect.TypeOf(v.value)
+}
+
+func (v *Mutex) GetHistory() []sync.HistoryEntry {
+	v.valueMu.RLock()
+	defer v.valueMu.RUnlock()
 	return []sync.HistoryEntry{
 		{
-			Version:   s.version.Load(),
+			Version:   v.version.Load(),
 			Timestamp: time.Now().UnixNano(),
-			Value:     s.value,
+			Value:     v.value,
 			ClientID:  "unknown",
 		},
 	}
+}
+
+func (v *Mutex) Close() error {
+	return nil
+}
+
+func (v *Mutex) Size() int64 {
+	return int64(binary.Size(v.value))
 }
 
 var _ sync.TypedVariable[any] = (*MutexTyped[any])(nil)
@@ -227,15 +263,12 @@ var _ sync.TypedVariable[any] = (*MutexTyped[any])(nil)
 // It also provides methods for setting and getting the value, checking if the value is dirty,
 type MutexTyped[T any] struct {
 	mu   sc.Mutex
-	root sync.Variable
+	root *Mutex
 }
 
-func NewMutexTyped[T any](initialValue T, maxHistory uint8) *MutexTyped[T] {
-	gob.Register(initialValue)
-
+func NewMutexTypedVariable[T any](cfg sync.VariableConfig) *MutexTyped[T] {
 	return &MutexTyped[T]{
-		mu:   sc.Mutex{},
-		root: NewMutex(initialValue, maxHistory),
+		root: NewMutexVariable(cfg),
 	}
 }
 
@@ -250,10 +283,6 @@ func (v *MutexTyped[T]) Get() (T, error) {
 	} else {
 		return v.getDefaultValue(res), errors.New("type mismatch")
 	}
-}
-
-func (v *MutexTyped[T]) getDefaultValue(val any) T {
-	return reflect.Zero(reflect.TypeOf(val)).Interface().(T)
 }
 
 func (v *MutexTyped[T]) Set(newValue T) error {
@@ -296,16 +325,44 @@ func (v *MutexTyped[T]) OnConflict(eventHandler func(local T, remote T) T) {
 	})
 }
 
-func (v *MutexTyped[T]) GetPermissionMask() sync.PermissionMask {
+func (v *MutexTyped[T]) GetPermissions() sync.PermissionMask {
 	return v.root.GetPermissions()
 }
 
-func (v *MutexTyped[T]) SetPermissionMask(mask sync.PermissionMask) {
+func (v *MutexTyped[T]) SetPermissions(mask sync.PermissionMask) {
 	v.root.SetPermissions(mask)
+}
+
+func (v *MutexTyped[T]) GetMetrics() sync.VariableMetrics {
+	return sync.VariableMetrics{}
+}
+
+func (v *MutexTyped[T]) GetStorageStrategy() sync.StorageStrategy {
+	return v.root.storageStrategy
+}
+
+func (v *MutexTyped[T]) CanMigrateTo(strategy sync.StorageStrategy) bool {
+	return false
+}
+
+func (v *MutexTyped[T]) Close() error {
+	return nil
+}
+
+func (v *MutexTyped[T]) Size() int64 {
+	return v.root.Size()
+}
+
+func (v *MutexTyped[T]) AsUntyped() sync.Variable {
+	return v.root
 }
 
 func (v *MutexTyped[T]) GetHistory() []sync.HistoryEntry {
 	return v.root.GetHistory()
+}
+
+func (v *MutexTyped[T]) getDefaultValue(val any) T {
+	return reflect.Zero(reflect.TypeOf(val)).Interface().(T)
 }
 
 func fastEqual(a, b any) bool {
