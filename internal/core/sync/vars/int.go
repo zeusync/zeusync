@@ -73,11 +73,11 @@ func (v *AtomicInt) Set(newValue int64) error {
 	oldValue := v.value.Load()
 
 	if oldValue == newValue {
-		resolver := v.conflictResolver.Load()
+		res := v.conflictResolver.Load()
 		onConflictFunc := v.onConflict.Load()
 
-		if resolver != nil {
-			newValue = (*resolver).Resolve(oldValue, newValue, make(map[string]any))
+		if res != nil {
+			newValue = (*res).Resolve(oldValue, newValue, make(map[string]any))
 		} else if onConflictFunc != nil {
 			newValue = (*onConflictFunc)(oldValue, newValue)
 		} else {

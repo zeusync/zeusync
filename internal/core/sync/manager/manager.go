@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"github.com/zeusync/zeusync/internal/core/sync/migrator"
 	sc "sync"
 	"time"
 
@@ -31,11 +32,12 @@ type DefaultVariableManager struct {
 
 // NewVariableManager creates and initializes a new DefaultVariableManager.
 func NewVariableManager() *DefaultVariableManager {
+	f := factory.NewVariableFactory()
 	return &DefaultVariableManager{
 		variables: make(map[string]sync.Variable),
-		factory:   factory.NewVariableFactory(),
+		factory:   f,
 		analyzer:  analyzer.NewDefaultAnalyzer(),
-		// migrator:  migrator.NewDefaultMigrator(), // TODO: Implement migration
+		migrator:  migrator.NewMigrator(f),
 	}
 }
 
