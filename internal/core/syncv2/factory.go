@@ -1,114 +1,64 @@
 package sync
 
-import (
-	"context"
-	"reflect"
-	"time"
-)
+import "unsafe"
 
-// Factory defines the interface for creating synchronized variables.
-// It supports different creation methods, including basic, strategy-specific, and optimized creation.
+// Factory defines the interface for creating different root implementations
+// This allows easy swapping of internal implementations without affecting the upper layer
 type Factory[T any] interface {
-	// Create creates a new synchronized variable with an automatically selected strategy.
-	Create(initialValue any, options ...Option) (Core[T], error)
+	// CreateAtomicRoot creates a new atomic root implementation
+	CreateAtomicRoot(initialValue T) AtomicRoot[T]
 
-	// CreateWithStrategy creates a new synchronized variable with a specified strategy.
-	CreateWithStrategy(strategy StorageStrategy, initialValue T, options ...Option) (Core[T], error)
+	// CreateMutexRoot creates a new mutex root implementation
+	CreateMutexRoot(initialValue T) MutexRoot[T]
 
-	// CreateOptimized creates a new synchronized variable optimized for a specific access pattern.
-	CreateOptimized(initialValue T, expectedPattern AccessPattern, options ...Option) (Core[T], error)
+	// CreateShardedRoot creates a new sharded root implementation
+	CreateShardedRoot(initialValue T, shardCount int) ShardedRoot[T]
 
-	// RegisterStrategy registers a new synchronization strategy.
-	RegisterStrategy(strategy StorageStrategy, constructor StrategyConstructor[T])
-	// ListStrategies returns a list of all registered strategy names.
-	ListStrategies() []string
-	// GetRecommendedStrategy recommends a storage strategy based on the value type and access pattern.
-	GetRecommendedStrategy(valueType reflect.Type, pattern AccessPattern) StorageStrategy
+	// CreateChannelRoot creates a new channel root implementation
+	CreateChannelRoot(initialValue T, bufferSize int) ChannelRoot[T]
+
+	// CreateLockFreeRoot creates a new lock-free root implementation
+	CreateLockFreeRoot(initialValue T) LockFreeRoot[T]
+
+	// CreatePersistedRoot creates a new persisted root implementation
+	CreatePersistedRoot(initialValue T, storagePath string) PersistedRoot[T]
+
+	// CreateReplicatedRoot creates a new replicated root implementation
+	CreateReplicatedRoot(initialValue T, nodeID string) ReplicatedRoot[T]
+
+	// CreateWriteOptimizedRoot creates a new write-optimized root implementation
+	CreateWriteOptimizedRoot(initialValue T) WriteOptimizedRoot[T]
+
+	// CreateReadOptimizedRoot creates a new read-optimized root implementation
+	CreateReadOptimizedRoot(initialValue T) ReadOptimizedRoot[T]
+
+	// CreateMemoryOptimizedRoot creates a new memory-optimized root implementation
+	CreateMemoryOptimizedRoot(initialValue T) MemoryOptimizedRoot[T]
 }
 
-// Analyzer defines the interface for analyzing the performance of synchronized variables.
-type Analyzer[T any] interface {
-	// AnalyzeVariable performs a real-time analysis of a variable.
-	AnalyzeVariable(v Core[T]) AnalysisResult
-	// MonitorVariable continuously monitors a variable and sends analysis results to a channel.
-	MonitorVariable(ctx context.Context, v Core[T], interval time.Duration) <-chan AnalysisResult
+// AtomicSpecificFactory allows creating type-specific optimized implementations
+type AtomicSpecificFactory interface {
+	// CreateInt64Atomic creates an optimized atomic implementation for int64
+	CreateInt64Atomic(initialValue int64) AtomicRoot[int64]
 
-	// DetectAccessPattern detects the access pattern of a variable based on its metrics.
-	DetectAccessPattern(metrics Metrics) AccessPattern
-	// PredictOptimalStrategy predicts the optimal storage strategy for a variable based on its metrics.
-	PredictOptimalStrategy(metrics Metrics) StorageStrategy
+	// CreateInt32Atomic creates an optimized atomic implementation for int32
+	CreateInt32Atomic(initialValue int32) AtomicRoot[int32]
 
-	// GetOptimizationSuggestions provides a list of optimization suggestions for a variable.
-	GetOptimizationSuggestions(v Core[T]) []OptimizationSuggestion
-	// ShouldMigrate determines if a variable should be migrated to a different strategy.
-	ShouldMigrate(v Core[T]) (bool, StorageStrategy, string)
-}
+	// CreateUint64Atomic creates an optimized atomic implementation for uint64
+	CreateUint64Atomic(initialValue uint64) AtomicRoot[uint64]
 
-// Migrator defines the interface for migrating a variable from one storage strategy to another.
-type Migrator[T any] interface {
-	// Migrate migrates a variable to a new storage strategy.
-	Migrate(v Core[T], targetStrategy StorageStrategy) (Core[T], error)
+	// CreateUint32Atomic creates an optimized atomic implementation for uint32
+	CreateUint32Atomic(initialValue uint32) AtomicRoot[uint32]
 
-	// PlanMigration creates a migration plan for a variable.
-	PlanMigration(v Core[T], targetStrategy StorageStrategy) MigrationPlan
-	// EstimateMigrationCost estimates the cost of a migration plan.
-	EstimateMigrationCost(plan MigrationPlan) MigrationCost
+	// CreateBoolAtomic creates an optimized atomic implementation for bool
+	CreateBoolAtomic(initialValue bool) AtomicRoot[bool]
 
-	// HotMigrate performs a hot migration with zero downtime.
-	HotMigrate(ctx context.Context, v Core[T], targetStrategy StorageStrategy) (Core[T], error)
-}
+	// CreatePointerAtomic creates an optimized atomic implementation for pointers
+	CreatePointerAtomic(initialValue unsafe.Pointer) AtomicRoot[unsafe.Pointer]
 
-// Option is a function that configures a variable.
-type Option func(*Config)
+	// CreateStringAtomic creates an optimized atomic implementation for strings
+	CreateStringAtomic(initialValue string) AtomicRoot[string]
 
-// Config holds the configuration for a synchronized variable.
-type Config struct {
-	Name            string            // Name of the variable
-	MaxHistory      uint8             // Maximum number of historical versions to keep
-	Permissions     PermissionMask    // Access permissions for the variable
-	StorageStrategy StorageStrategy   // The underlying storage strategy
-	EnableMetrics   bool              // Flag to enable/disable metrics collection
-	EnableHistory   bool              // Flag to enable/disable history tracking
-	TTL             time.Duration     // Time-to-live for the variable
-	Tags            map[string]string // Tags for categorizing and filtering variables
-}
-
-// VariableSpec defines the specification for creating a new variable.
-type VariableSpec struct {
-	Name         string   // Name of the variable
-	InitialValue any      // Initial value of the variable
-	Options      []Option // Configuration options for the variable
-}
-
-// StrategyConstructor is a function that creates a new variable with a specific strategy.
-type StrategyConstructor[T any] func(config Config) (Core[T], error)
-
-// WithMaxHistory sets the maximum number of historical versions to keep.
-func WithMaxHistory(maxHistory uint8) Option {
-	return func(c *Config) { c.MaxHistory = maxHistory }
-}
-
-// WithPermissions sets the access permissions for the variable.
-func WithPermissions(permissions PermissionMask) Option {
-	return func(c *Config) { c.Permissions = permissions }
-}
-
-// WithStrategy sets the storage strategy for the variable.
-func WithStrategy(strategy StorageStrategy) Option {
-	return func(c *Config) { c.StorageStrategy = strategy }
-}
-
-// WithMetrics enables or disables metrics collection for the variable.
-func WithMetrics(enabled bool) Option {
-	return func(c *Config) { c.EnableMetrics = enabled }
-}
-
-// WithTTL sets the time-to-live for the variable.
-func WithTTL(ttl time.Duration) Option {
-	return func(c *Config) { c.TTL = ttl }
-}
-
-// WithTags sets the tags for the variable.
-func WithTags(tags map[string]string) Option {
-	return func(c *Config) { c.Tags = tags }
+	// CreateFloatAtomic creates an optimized atomic implementation for float64
+	CreateFloatAtomic(initialValue float64) AtomicRoot[float64]
 }

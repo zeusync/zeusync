@@ -8,7 +8,6 @@ import (
 type Root[T any] interface {
 	Get() T
 	Set(T)
-	CompareAndSwap(old, new T) bool
 
 	Version() uint64
 
@@ -53,6 +52,52 @@ type Core[T any] interface {
 
 	Close() error
 	Size() int
+}
+
+// Variable provides a clean, simple interface for synchronized variables
+// This is the interface that users will interact with, hiding all internal complexity
+type Variable[T any] interface {
+	// Get returns the current value
+	Get() T
+
+	// Set updates the value
+	Set(value T)
+
+	// Update applies a function to update the value atomically
+	Update(callback func(current T) T) T
+
+	// Subscribe to value changes
+	Subscribe(callback func(oldValue, newValue T)) UnsubscribeFunc
+
+	// GetVersion returns the current version number
+	GetVersion() uint64
+
+	// Close releases resources
+	Close() error
+}
+
+// UnsubscribeFunc is returned by Subscribe to allow unsubscribing
+type UnsubscribeFunc func()
+
+// Option provides configuration options for creating simple variables
+type Option struct {
+	// Strategy specifies the storage strategy to use
+	Strategy StorageStrategy
+
+	// AutoOptimize enables automatic strategy optimization based on usage patterns
+	AutoOptimize bool
+
+	// MetricsEnabled enables metrics collection
+	MetricsEnabled bool
+
+	// NetworkEnabled enables network synchronization
+	NetworkEnabled bool
+
+	// PersistenceEnabled enables automatic persistence
+	PersistenceEnabled bool
+
+	// Custom configuration for specific strategies
+	Config Configuration
 }
 
 // StorageStrategy defines the different storage strategies for a synchronized variable.
@@ -131,25 +176,6 @@ const (
 	OpDelete
 )
 
-// Metrics contains performance and usage metrics for a variable.
-type Metrics struct {
-	Reads     uint64 // Number of read operations
-	Writes    uint64 // Number of write operations
-	Conflicts uint64 // Number of conflicts
-	Errors    uint64 // Number of errors
-
-	ReadLatency  int64 // Read latency in microseconds
-	WriteLatency int64 // Write latency in microseconds
-
-	DeltasSent     uint64 // Number of deltas sent
-	DeltasReceived uint64 // Number of deltas received
-	SyncLatency    int64  // Sync latency in microseconds
-
-	MemUsage int64 // Memory usage in bytes
-
-	Pattern AccessPattern // Access pattern detected by the analysis
-}
-
 // AccessPattern defines the different access patterns for a variable.
 type AccessPattern uint8
 
@@ -225,18 +251,7 @@ type MigrationEvent struct {
 	Duration  time.Duration   // Duration of the migration
 }
 
-// GlobalMetrics contains metrics for the entire variable manager.
-type GlobalMetrics struct {
-	TotalVariables       int                     // Total number of variables
-	MemoryUsage          int64                   // Total memory usage
-	TotalOperations      uint64                  // Total number of operations
-	AverageLatency       time.Duration           // Average latency of operations
-	StrategyDistribution map[StorageStrategy]int // Distribution of storage strategies
-	MigrationCount       uint64                  // Total number of migrations
-	OptimizationSavings  float64                 // Estimated savings from optimizations
-}
-
 type FastString struct {
-	data unsafe.Pointer
-	len  int
+	data   unsafe.Pointer
+	length int
 }
