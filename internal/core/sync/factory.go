@@ -96,6 +96,7 @@ type VariableOption func(*VariableConfig)
 
 // VariableConfig holds the configuration for a synchronized variable.
 type VariableConfig struct {
+	Name             string            // Name of the variable
 	MaxHistory       uint8             // Maximum number of historical versions to keep
 	Permissions      PermissionMask    // Access permissions for the variable
 	ConflictResolver ConflictResolver  // Conflict resolver for concurrent writes

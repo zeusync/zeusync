@@ -3,8 +3,9 @@ package migrator
 import (
 	"context"
 	"fmt"
-	"github.com/zeusync/zeusync/internal/core/sync"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/sync"
 )
 
 // Migrator implements the VariableMigrator interface.

@@ -1,5 +1,7 @@
 package sync
 
+import "time"
+
 // StateManage defines the interface for managing the state of synchronized variables.
 // This includes creating and restoring snapshots, as well as handling deltas.
 type StateManage interface {
@@ -19,13 +21,26 @@ type StateManage interface {
 }
 
 // Snapshot represents a snapshot of the state.
-type Snapshot interface{}
+type Snapshot interface {
+	GetVersion() uint64
+	GetTimespan() time.Time
+	GetData() []byte
+	Validate() error
+}
 
 // SpatialArea defines a spatial area of interest.
-type SpatialArea struct{}
+type SpatialArea struct {
+	MinX, MinY, MinZ float32
+	ManX, MaxY, MaxZ float32
+	Radius           float32
+}
 
 // StateSubset represents a subset of the state.
-type StateSubset struct{}
+type StateSubset struct {
+	Variables map[string]any
+	Version   uint64
+	Timestamp time.Time
+}
 
 // PermissionMask defines a bitmask for access permissions.
 type PermissionMask uint16

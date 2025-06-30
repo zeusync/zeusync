@@ -3,9 +3,10 @@ package manager
 import (
 	"context"
 	"fmt"
-	"github.com/zeusync/zeusync/internal/core/sync/migrator"
 	sc "sync"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/sync/migrator"
 
 	"github.com/zeusync/zeusync/internal/core/sync"
 	"github.com/zeusync/zeusync/internal/core/sync/analyzer"
