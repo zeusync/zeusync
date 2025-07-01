@@ -2,12 +2,13 @@ package interfaces
 
 import (
 	"fmt"
+	"reflect"
+	"unsafe"
+
 	"github.com/zeusync/zeusync/internal/core/syncv2"
 	"github.com/zeusync/zeusync/internal/core/syncv2/types"
 	"github.com/zeusync/zeusync/internal/core/syncv2/vars"
 	"github.com/zeusync/zeusync/internal/core/syncv2/wrappers"
-	"reflect"
-	"unsafe"
 )
 
 // RootFactory defines the interface for creating different root implementations

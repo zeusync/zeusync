@@ -1,9 +1,10 @@
 package sync
 
 import (
+	"time"
+
 	"github.com/zeusync/zeusync/internal/core/syncv2/metrics"
 	"github.com/zeusync/zeusync/internal/core/syncv2/types"
-	"time"
 )
 
 // Root provides a clean, simple interface for synchronized variables

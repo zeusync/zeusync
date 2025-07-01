@@ -2,10 +2,11 @@ package wrappers
 
 import (
 	"encoding/binary"
-	"github.com/zeusync/zeusync/internal/core/syncv2"
-	"github.com/zeusync/zeusync/internal/core/syncv2/metrics"
 	sc "sync"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/syncv2"
+	"github.com/zeusync/zeusync/internal/core/syncv2/metrics"
 )
 
 // AtomicWrapper wraps any AtomicRoot implementation to provide the full Core interface

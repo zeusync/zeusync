@@ -1,8 +1,9 @@
 package metrics
 
 import (
-	"github.com/zeusync/zeusync/internal/core/syncv2/types"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/syncv2/types"
 )
 
 // Metrics provides basic statistics about variables usage
