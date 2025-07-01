@@ -2,7 +2,6 @@ package sync
 
 import "unsafe"
 
-// AtomicRoot defines the interface for atomic-based variable implementations.
 // AtomicRoot variables are optimized for simple types that can be handled atomically.
 type AtomicRoot[T any] interface {
 	Root[T]
@@ -16,9 +15,9 @@ type AtomicRoot[T any] interface {
 	// Swap atomically swaps the value and returns the old value
 	Swap(new T) T
 
-	// ApplyDelta atomically adds delta to the value (for numeric types)
+	// ApplyDeltas atomically adds delta to the value (for numeric types)
 	// Returns the new value after addition
-	ApplyDelta(deltas ...Delta[T]) T
+	ApplyDeltas(deltas ...Delta[T]) T
 }
 
 // MutexRoot defines the interface for mutex-based variable implementations.

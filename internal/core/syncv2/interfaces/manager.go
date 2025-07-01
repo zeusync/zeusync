@@ -1,12 +1,17 @@
-package sync
+package interfaces
+
+import (
+	"github.com/zeusync/zeusync/internal/core/syncv2"
+	"github.com/zeusync/zeusync/internal/core/syncv2/metrics"
+)
 
 // Manager provides a simple interface for managing variables
 type Manager[T any] interface {
 	// Create creates a new variable with the given name and initial value
-	Create(name string, initialValue T, options ...Option) (Variable[T], error)
+	Create(name string, initialValue T, options ...sync.Option) (sync.Variable[T], error)
 
 	// Get retrieves an existing variable by name
-	Get(name string) (Variable[T], bool)
+	Get(name string) (sync.Variable[T], bool)
 
 	// Delete removes a variable
 	Delete(name string) bool
@@ -15,7 +20,7 @@ type Manager[T any] interface {
 	List() []string
 
 	// Stats returns usage statistics
-	Stats() Metrics
+	Stats() metrics.Metrics
 
 	// Close closes the manager and all variables
 	Close() error

@@ -4,15 +4,15 @@ import "time"
 
 // StateManage defines the interface for managing the state of synchronized variables.
 // This includes creating and restoring snapshots, as well as handling deltas.
-type StateManage interface {
+type StateManage[T any] interface {
 	// CreateSnapshot creates a snapshot of the current state.
 	CreateSnapshot() (Snapshot, error)
 	// RestoreSnapshot restores the state from a snapshot.
 	RestoreSnapshot(snapshot Snapshot) error
 	// GetDelta returns the changes since a specific version.
-	GetDelta(fromVersion uint64) (Delta, error)
+	GetDelta(fromVersion uint64) (Delta[T], error)
 	// ApplyDelta applies a set of changes to the state.
-	ApplyDelta(Delta) error
+	ApplyDelta(Delta[T]) error
 
 	// SetIntersetAres sets the area of interest for a client.
 	SetIntersetAres(clientID string, area SpatialArea) error

@@ -1,10 +1,12 @@
 package sync
 
 import (
+	"github.com/zeusync/zeusync/internal/core/syncv2/metrics"
+	"github.com/zeusync/zeusync/internal/core/syncv2/types"
 	"time"
-	"unsafe"
 )
 
+// Root provides a clean, simple interface for synchronized variables
 type Root[T any] interface {
 	Get() T
 	Set(T)
@@ -15,8 +17,9 @@ type Root[T any] interface {
 	MarkClean()
 }
 
+// Networked provides a clean, simple interface for networked variables
 type Networked[T any] interface {
-	Delta(since uint64) []Delta[T]
+	Delta(since uint64) Delta[T]
 	ApplyDelta(...Delta[T]) error
 
 	SetResolver(ConflictResolver[T])
@@ -25,24 +28,28 @@ type Networked[T any] interface {
 	Unmarshal([]byte) error
 }
 
+// Serializable provides a clean, simple interface for serializing and deserializing variables.
 type Serializable[T any] interface {
 	Serialize() ([]byte, error)
 	Deserialize([]byte) error
 }
 
+// Observable provides a clean, simple interface for observing variable changes.
 type Observable[T any] interface {
 	OnChange(func(old, new T))
 	OnConflict(func(local, remote T) T)
 
-	Metrics() Metrics
+	Metrics() metrics.VariableMetrics
 }
 
+// Permissioned provides a clean, simple interface for managing permissions for variable access.
 type Permissioned interface {
 	CheckRead(clientID string) bool
 	CheckWrite(clientID string) bool
-	SetPermissions(read, write []string)
+	SetPermissions(permissions Permissions)
 }
 
+// Core provides a clean, simple interface for synchronized variables
 type Core[T any] interface {
 	Root[T]
 	Networked[T]
@@ -76,13 +83,18 @@ type Variable[T any] interface {
 	Close() error
 }
 
+type Marshaller[T any] interface {
+	Marshal(T) ([]byte, error)
+	Unmarshal([]byte) (T, error)
+}
+
 // UnsubscribeFunc is returned by Subscribe to allow unsubscribing
 type UnsubscribeFunc func()
 
 // Option provides configuration options for creating simple variables
 type Option struct {
 	// Strategy specifies the storage strategy to use
-	Strategy StorageStrategy
+	Strategy types.StorageStrategy
 
 	// AutoOptimize enables automatic strategy optimization based on usage patterns
 	AutoOptimize bool
@@ -97,39 +109,13 @@ type Option struct {
 	PersistenceEnabled bool
 
 	// Custom configuration for specific strategies
-	Config Configuration
+	Config types.Configuration
 }
-
-// StorageStrategy defines the different storage strategies for a synchronized variable.
-type StorageStrategy uint8
-
-const (
-	// StrategyAtomic uses atomic operations for synchronization.
-	StrategyAtomic StorageStrategy = iota
-	// StrategyMutex uses a read-write mutex for synchronization.
-	StrategyMutex
-	// StrategyChannels uses channels for synchronization.
-	StrategyChannels
-	// StrategySharded uses sharding for high concurrency.
-	StrategySharded
-	// StrategyLockFree uses lock-free data structures.
-	StrategyLockFree
-	// StrategyPersisted persists the variable to disk.
-	StrategyPersisted
-	// StrategyReplicated replicates the variable across multiple nodes.
-	StrategyReplicated
-	// StrategyWriteOptimized is optimized for write-heavy workloads.
-	StrategyWriteOptimized
-	// StrategyReadOptimized is optimized for read-heavy workloads.
-	StrategyReadOptimized
-	// StrategyMemoryOptimized is optimized for low memory usage.
-	StrategyMemoryOptimized
-)
 
 // Permissions defines the read and write permissions for a variable.
 type Permissions struct {
-	Read  []string // List of client IDs with read access
-	Write []string // List of client IDs with write access
+	Read  map[string]struct{} // Unique list of client IDs with read access
+	Write map[string]struct{} // Unique list of client IDs with write access
 }
 
 // HistoryEntry represents a single entry in the history of a variable.
@@ -176,53 +162,33 @@ const (
 	OpDelete
 )
 
-// AccessPattern defines the different access patterns for a variable.
-type AccessPattern uint8
-
-const (
-	// PatternRandom indicates a random access pattern.
-	PatternRandom AccessPattern = iota
-	// PatternBurst indicates a bursty access pattern.
-	PatternBurst
-	// PatternSteady indicates a steady access pattern.
-	PatternSteady
-	// PatternReadHeavy indicates a read-heavy access pattern.
-	PatternReadHeavy
-	// PatternWriteHeavy indicates a write-heavy access pattern.
-	PatternWriteHeavy
-	// PatternMixed indicates a mixed read/write access pattern.
-	PatternMixed
-	// PatternRareAccess indicates a rare access pattern.
-	PatternRareAccess
-)
-
 // AnalysisResult contains the results of a variable analysis.
 type AnalysisResult struct {
-	Strategy        StorageStrategy          // Recommended storage strategy
+	Strategy        types.StorageStrategy    // Recommended storage strategy
 	Confidence      float64                  // Confidence in the recommendation
 	Reasoning       string                   // Explanation for the recommendation
-	Metrics         Metrics                  // Metrics used for the analysis
+	Metrics         metrics.Metrics          // Metrics used for the analysis
 	Recommendations []OptimizationSuggestion // List of optimization suggestions
 	Timestamp       time.Time                // Timestamp of the analysis
 }
 
 // OptimizationSuggestion provides a suggestion for optimizing a variable.
 type OptimizationSuggestion struct {
-	Type        string          // Type of suggestion (e.g., "migrate", "tune")
-	Priority    int             // Priority of the suggestion (1-10)
-	Description string          // Description of the suggestion
-	Impact      string          // Estimated impact of the optimization
-	Effort      string          // Estimated effort to implement the optimization
-	Strategy    StorageStrategy // Recommended strategy (if applicable)
+	Type        string                // Type of suggestion (e.g., "migrate", "tune")
+	Priority    int                   // Priority of the suggestion (1-10)
+	Description string                // Description of the suggestion
+	Impact      string                // Estimated impact of the optimization
+	Effort      string                // Estimated effort to implement the optimization
+	Strategy    types.StorageStrategy // Recommended strategy (if applicable)
 }
 
 // MigrationPlan outlines the steps for migrating a variable to a new strategy.
 type MigrationPlan struct {
-	Source        StorageStrategy // Source storage strategy
-	Target        StorageStrategy // Target storage strategy
-	Steps         []MigrationStep // Steps in the migration plan
-	EstimatedTime time.Duration   // Estimated time for the migration
-	RiskLevel     string          // Estimated risk level of the migration
+	Source        types.StorageStrategy // Source storage strategy
+	Target        types.StorageStrategy // Target storage strategy
+	Steps         []MigrationStep       // Steps in the migration plan
+	EstimatedTime time.Duration         // Estimated time for the migration
+	RiskLevel     string                // Estimated risk level of the migration
 }
 
 // MigrationStep represents a single step in a migration plan.
@@ -243,15 +209,10 @@ type MigrationCost struct {
 
 // MigrationEvent represents a migration event.
 type MigrationEvent struct {
-	From      StorageStrategy // Source storage strategy
-	To        StorageStrategy // Target storage strategy
-	Reason    string          // Reason for the migration
-	Timestamp time.Time       // Timestamp of the migration
-	Success   bool            // Whether the migration was successful
-	Duration  time.Duration   // Duration of the migration
-}
-
-type FastString struct {
-	data   unsafe.Pointer
-	length int
+	From      types.StorageStrategy // Source storage strategy
+	To        types.StorageStrategy // Target storage strategy
+	Reason    string                // Reason for the migration
+	Timestamp time.Time             // Timestamp of the migration
+	Success   bool                  // Whether the migration was successful
+	Duration  time.Duration         // Duration of the migration
 }

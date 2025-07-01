@@ -1,6 +1,9 @@
-package sync
+package metrics
 
-import "time"
+import (
+	"github.com/zeusync/zeusync/internal/core/syncv2/types"
+	"time"
+)
 
 // Metrics provides basic statistics about variables usage
 type Metrics struct {
@@ -27,16 +30,16 @@ type VariableMetrics struct {
 
 	MemUsage int64 // Memory usage in bytes
 
-	Pattern AccessPattern // Access pattern detected by the analysis
+	Pattern types.AccessPattern // Access pattern detected by the analysis
 }
 
 // GlobalMetrics contains metrics for the entire variable manager.
 type GlobalMetrics struct {
-	TotalVariables       int                     // Total number of variables
-	MemoryUsage          int64                   // Total memory usage
-	TotalOperations      uint64                  // Total number of operations
-	AverageLatency       time.Duration           // Average latency of operations
-	StrategyDistribution map[StorageStrategy]int // Distribution of storage strategies
-	MigrationCount       uint64                  // Total number of migrations
-	OptimizationSavings  float64                 // Estimated savings from optimizations
+	TotalVariables       int                           // Total number of variables
+	MemoryUsage          int64                         // Total memory usage
+	TotalOperations      uint64                        // Total number of operations
+	AverageLatency       time.Duration                 // Average latency of operations
+	StrategyDistribution map[types.StorageStrategy]int // Distribution of storage strategies
+	MigrationCount       uint64                        // Total number of migrations
+	OptimizationSavings  float64                       // Estimated savings from optimizations
 }
