@@ -100,7 +100,6 @@ func Benchmark_AtomicVariable(b *testing.B) {
 
 		v := NewAtomicVariable(cfg)
 
-		// Предварительно сгенерированные строки
 		const poolSize = 100
 		strings := make([]string, poolSize)
 		for i := range strings {

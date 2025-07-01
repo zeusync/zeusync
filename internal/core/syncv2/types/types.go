@@ -60,6 +60,10 @@ const (
 	AtomicUint64
 	// AtomicUint32 uses sync/atomic uint32 operations (for uint32 types)
 	AtomicUint32
+	// AtomicFloat64 uses sync/atomic float64 operations (for float64 types)
+	AtomicFloat64
+	// AtomicFloat32 uses sync/atomic float32 operations (for float32 types)
+	AtomicFloat32
 	// AtomicPointer uses sync/atomic pointer operations (for pointer types)
 	AtomicPointer
 	// AtomicBool uses sync/atomic bool operations (for bool types)
