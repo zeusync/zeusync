@@ -44,7 +44,7 @@ func (c *BufferedChannel[T]) Set(value T) {
 	c.version.Add(1)
 	c.dirty.Store(true)
 
-	// Try to send to channel (non-blocking)
+	// Try to send to ch (non-blocking)
 	select {
 	case c.ch <- value:
 	default:
@@ -76,8 +76,8 @@ func (c *BufferedChannel[T]) Receive() (T, bool) {
 		c.current.Store(value)
 		return value, true
 	default:
-		var zero T
-		return zero, false
+		var zero = new(T)
+		return *zero, false
 	}
 }
 
@@ -111,19 +111,19 @@ func (c *BufferedChannel[T]) SetBufferSize(size int) error {
 	defer c.mx.Unlock()
 
 	if c.closed.Load() {
-		return fmt.Errorf("channel is closed")
+		return fmt.Errorf("ch is closed")
 	}
 
-	// Create new channel with new size
+	// Create new ch with new size
 	newCh := make(chan T, size)
 
-	// Drain old channel and copy to new one
+	// Drain old ch and copy to new one
 	close(c.ch)
 	for value := range c.ch {
 		select {
 		case newCh <- value:
 		default:
-			// New channel is smaller and full, drop remaining values
+			// New ch is smaller and full, drop remaining values
 			break
 		}
 	}
@@ -147,7 +147,7 @@ func (c *BufferedChannel[T]) MarkClean() {
 	c.dirty.Store(false)
 }
 
-// Close closes the channel
+// Close closes the ch
 func (c *BufferedChannel[T]) Close() error {
 	if c.closed.CompareAndSwap(false, true) {
 		close(c.ch)
@@ -192,6 +192,7 @@ func (c *UnbufferedChannel[T]) Set(value T) {
 }
 
 // Send sends a value through the channel (non-blocking)
+// Returns false when the channel is closed or nobody receiving cross it
 func (c *UnbufferedChannel[T]) Send(value T) bool {
 	if c.closed.Load() {
 		return false
@@ -209,18 +210,20 @@ func (c *UnbufferedChannel[T]) Send(value T) bool {
 }
 
 // Receive receives a value from the channel (non-blocking)
+// Returns false when the channel is closed or nobody sending cross it
 func (c *UnbufferedChannel[T]) Receive() (T, bool) {
 	select {
 	case value := <-c.ch:
 		c.current.Store(value)
 		return value, true
 	default:
-		var zero T
-		return zero, false
+		var zero = new(T)
+		return *zero, false
 	}
 }
 
-// SendBlocking sends a value through the channel (blocking)
+// SendBlocking sends a value through the channel (blocking).
+// Invoker will be blocked until a value will be received (pipe)
 func (c *UnbufferedChannel[T]) SendBlocking(value T) {
 	if c.closed.Load() {
 		return
@@ -232,7 +235,8 @@ func (c *UnbufferedChannel[T]) SendBlocking(value T) {
 	c.dirty.Store(true)
 }
 
-// ReceiveBlocking receives a value from the channel (blocking)
+// ReceiveBlocking receives a value from the channel (blocking).
+// Invoker will be blocked until a value will be sent (pipe)
 func (c *UnbufferedChannel[T]) ReceiveBlocking() T {
 	value := <-c.ch
 	c.current.Store(value)
@@ -246,7 +250,7 @@ func (c *UnbufferedChannel[T]) BufferSize() int {
 
 // SetBufferSize is not supported for unbuffered channels
 func (c *UnbufferedChannel[T]) SetBufferSize(size int) error {
-	return fmt.Errorf("cannot set buffer size on unbuffered channel")
+	return fmt.Errorf("cannot set buffer size on unbuffered ch")
 }
 
 // Version returns the current version number
@@ -264,7 +268,7 @@ func (c *UnbufferedChannel[T]) MarkClean() {
 	c.dirty.Store(false)
 }
 
-// Close closes the channel
+// Close closes the ch
 func (c *UnbufferedChannel[T]) Close() error {
 	if c.closed.CompareAndSwap(false, true) {
 		close(c.ch)
@@ -418,7 +422,7 @@ func (c *PriorityChannel[T]) SetBufferSize(size int) error {
 	defer c.mx.Unlock()
 
 	if c.closed.Load() {
-		return fmt.Errorf("channel is closed")
+		return fmt.Errorf("ch is closed")
 	}
 
 	c.maxSize = size
@@ -455,7 +459,7 @@ var _ sync.ChannelRoot[string] = (*BroadcastChannel[string])(nil)
 
 // BroadcastChannel implements ChannelRoot using broadcast channels
 type BroadcastChannel[T any] struct {
-	subscribers []chan T
+	subscribers map[*Subscription[T]]chan T
 	current     atomic.Value // stores T
 	version     atomic.Uint64
 	dirty       atomic.Bool
@@ -467,7 +471,7 @@ type BroadcastChannel[T any] struct {
 // NewBroadcastChannel creates a new BroadcastChannel
 func NewBroadcastChannel[T any](bufferSize int, initialValue T) *BroadcastChannel[T] {
 	c := &BroadcastChannel[T]{
-		subscribers: make([]chan T, 0),
+		subscribers: make(map[*Subscription[T]]chan T, 10),
 		bufferSize:  bufferSize,
 	}
 	c.current.Store(initialValue)
@@ -477,33 +481,50 @@ func NewBroadcastChannel[T any](bufferSize int, initialValue T) *BroadcastChanne
 	return c
 }
 
-// Subscribe adds a new subscriber channel
-func (c *BroadcastChannel[T]) Subscribe() <-chan T {
+// Subscription represents a subscription to a broadcast channel
+type Subscription[T any] struct {
+	ch    <-chan T
+	close func()
+}
+
+// Channel returns the channel for the subscription
+func (s *Subscription[T]) Channel() <-chan T {
+	return s.ch
+}
+
+// Close closes the subscription. Save to multi calls
+func (s *Subscription[T]) Close() {
+	s.close()
+}
+
+// Subscribe adds a new subscriber ch
+func (c *BroadcastChannel[T]) Subscribe() *Subscription[T] {
 	c.mx.Lock()
 	defer c.mx.Unlock()
 
 	if c.closed.Load() {
-		templCh := make(chan T)
-		close(templCh)
-		return templCh
+		ch := make(chan T, 1)
+		close(ch)
+		return &Subscription[T]{ch: ch, close: func() {}}
 	}
 
 	ch := make(chan T, c.bufferSize)
-	c.subscribers = append(c.subscribers, ch)
-	return ch
+	sub := &Subscription[T]{
+		ch: ch,
+	}
+	sub.close = func() { c.Unsubscribe(sub) }
+	c.subscribers[sub] = ch
+	return sub
 }
 
-// Unsubscribe removes a subscriber channel
-func (c *BroadcastChannel[T]) Unsubscribe(ch <-chan T) {
+// Unsubscribe removes a subscriber ch
+func (c *BroadcastChannel[T]) Unsubscribe(sub *Subscription[T]) {
 	c.mx.Lock()
 	defer c.mx.Unlock()
 
-	for i, sub := range c.subscribers {
-		if sub == ch {
-			c.subscribers = append(c.subscribers[:i], c.subscribers[i+1:]...)
-			close(sub)
-			break
-		}
+	if ch, ok := c.subscribers[sub]; ok {
+		delete(c.subscribers, sub)
+		close(ch)
 	}
 }
 
@@ -541,7 +562,7 @@ func (c *BroadcastChannel[T]) Send(value T) bool {
 			}
 		}
 	} else {
-		concurrent.Batch(sequence.From(c.subscribers), 4, func(batch []chan T) {
+		concurrent.Batch(sequence.FromMap(c.subscribers), 4, func(batch []chan T) {
 			for _, sub := range c.subscribers {
 				select {
 				case sub <- value:
@@ -596,7 +617,7 @@ func (c *BroadcastChannel[T]) SetBufferSize(size int) error {
 	defer c.mx.Unlock()
 
 	if c.closed.Load() {
-		return fmt.Errorf("channel is closed")
+		return fmt.Errorf("ch is closed")
 	}
 
 	c.bufferSize = size

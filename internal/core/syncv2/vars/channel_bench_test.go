@@ -21,7 +21,7 @@ func BenchmarkBufferedChannelVar_Send(b *testing.B) {
 func BenchmarkBufferedChannelVar_Receive(b *testing.B) {
 	ch := NewBufferedChannel[int](1000, 0)
 
-	// Pre-fill the channel
+	// Pre-fill the ch
 	for i := 0; i < 1000; i++ {
 		ch.Send(i)
 	}
@@ -69,7 +69,7 @@ func BenchmarkPriorityChannelVar_Send(b *testing.B) {
 func BenchmarkPriorityChannelVar_Receive(b *testing.B) {
 	ch := NewPriorityChannel[int](1000, 0)
 
-	// Pre-fill the channel
+	// Pre-fill the ch
 	for i := 0; i < 1000; i++ {
 		ch.SendWithPriority(i, i%10)
 	}
@@ -93,11 +93,7 @@ func BenchmarkBroadcastChannelVar_Send(b *testing.B) {
 	// Add some subscribers
 	for i := 0; i < 5; i++ {
 		sub := ch.Subscribe()
-		go func() {
-			for range sub {
-				// Consume messages
-			}
-		}()
+		sub.Channel()
 	}
 
 	b.ResetTimer()
