@@ -108,6 +108,8 @@ const (
 	PriorityChannel
 	// BroadcastChannel uses broadcast channels
 	BroadcastChannel
+	// CycleChannel uses cycle-based channels
+	CycleChannel
 )
 
 // LockFreeType defines different implementations for lock-free roots
@@ -201,32 +203,32 @@ type Configuration struct {
 	// AtomicType specifies which atomic implementation to use
 	AtomicType AtomicType
 
-	// MutexImpl specifies which mutex implementation to use
-	MutexImpl MutexType
+	// MutexType specifies which mutex implementation to use
+	MutexType MutexType
 
-	// ShardedImpl specifies which sharded implementation to use
-	ShardedImpl ShardedType
+	// ShardedType specifies which sharded implementation to use
+	ShardedType ShardedType
 
-	// ChannelImpl specifies which channel implementation to use
-	ChannelImpl ChannelType
+	// ChannelType specifies which channel implementation to use
+	ChannelType ChannelType
 
-	// LockFreeImpl specifies which lock-free implementation to use
-	LockFreeImpl LockFreeType
+	// LockFreeType specifies which lock-free implementation to use
+	LockFreeType LockFreeType
 
-	// PersistedImpl specifies which persisted implementation to use
-	PersistedImpl PersistedType
+	// PersistedType specifies which persisted implementation to use
+	PersistedType PersistedType
 
-	// ReplicatedImpl specifies which replicated implementation to use
-	ReplicatedImpl ReplicatedType
+	// ReplicatedType specifies which replicated implementation to use
+	ReplicatedType ReplicatedType
 
-	// WriteOptimizedImpl specifies which write-optimized implementation to use
-	WriteOptimizedImpl WriteOptimizedType
+	// WriteOptimizedType specifies which write-optimized implementation to use
+	WriteOptimizedType WriteOptimizedType
 
-	// ReadOptimizedImpl specifies which read-optimized implementation to use
-	ReadOptimizedImpl ReadOptimizedTypes
+	// ReadOptimizedType specifies which read-optimized implementation to use
+	ReadOptimizedType ReadOptimizedTypes
 
-	// MemoryOptimizedImpl specifies which memory-optimized implementation to use
-	MemoryOptimizedImpl MemoryOptimizedType
+	// MemoryOptimizedType specifies which memory-optimized implementation to use
+	MemoryOptimizedType MemoryOptimizedType
 
 	// Additional configuration parameters
 	ShardCount  int

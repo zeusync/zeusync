@@ -651,3 +651,245 @@ func (c *BroadcastChannel[T]) Close() error {
 	}
 	return nil
 }
+
+var _ sync.ChannelRoot[string] = (*CycleChannel[string])(nil)
+
+// CycleChannel implements a circular buffer channel with non-blocking operations
+type CycleChannel[T any] struct {
+	buffer   []T           // Circular buffer
+	size     uint32        // Fixed size of the buffer
+	head     atomic.Uint32 // Position for next write
+	tail     atomic.Uint32 // Position for next read
+	count    atomic.Int32  // Number of items in buffer
+	version  atomic.Uint64 // Version counter for changes
+	dirty    atomic.Bool   // Flag indicating if value was modified
+	closed   atomic.Bool   // Flag indicating if channel is closed
+	current  atomic.Value  // Current value (interface{} type)
+	notEmpty *sc.Cond      // Condition variable for waiting receivers
+	mx       sc.RWMutex    // Main mutex for synchronization
+}
+
+// NewCycleChannel creates a new CycleChannel with given buffer size
+// Minimum buffer size is 1 to ensure proper operation
+func NewCycleChannel[T any](bufferSize int, initialValue T) *CycleChannel[T] {
+	if bufferSize <= 0 {
+		bufferSize = 1 // Ensure minimum buffer size
+	}
+
+	c := &CycleChannel[T]{
+		buffer: make([]T, bufferSize),
+		size:   uint32(bufferSize),
+	}
+	c.current.Store(initialValue)
+	c.notEmpty = sc.NewCond(&c.mx)
+	return c
+}
+
+// Get returns the current value atomically
+func (c *CycleChannel[T]) Get() T {
+	return c.current.Load().(T) // Type assertion is safe here
+}
+
+// Set updates the current value atomically
+func (c *CycleChannel[T]) Set(value T) {
+	c.current.Store(value)
+	c.version.Add(1)
+	c.dirty.Store(true)
+}
+
+// Send adds a value to the buffer (non-blocking, always succeeds unless closed)
+func (c *CycleChannel[T]) Send(value T) bool {
+	if c.closed.Load() {
+		return false
+	}
+
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
+	headPos := c.head.Load() % c.size
+	c.buffer[headPos] = value // Store the new value
+
+	// Update positions and counters
+	c.head.Add(1)
+	currentCount := c.count.Add(1)
+
+	// Maintain circular behavior when buffer is full
+	if currentCount > int32(c.size) {
+		c.tail.Add(1)
+		c.count.Store(int32(c.size))
+	}
+
+	// Update metadata
+	c.current.Store(value)
+	c.version.Add(1)
+	c.dirty.Store(true)
+	c.notEmpty.Signal() // Notify any waiting receivers
+
+	return true
+}
+
+// Receive retrieves a value from the buffer (non-blocking)
+func (c *CycleChannel[T]) Receive() (T, bool) {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
+	if c.count.Load() == 0 {
+		var zero T
+		return zero, false
+	}
+
+	tailPos := c.tail.Load() % c.size
+	value := c.buffer[tailPos]
+
+	// Update positions and counters
+	c.tail.Add(1)
+	c.count.Add(-1)
+
+	// Update current value
+	c.current.Store(value)
+
+	return value, true
+}
+
+// ReceiveBlocking retrieves a value, blocking if buffer is empty
+func (c *CycleChannel[T]) ReceiveBlocking() T {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
+	// Wait for data or closure
+	for c.count.Load() == 0 && !c.closed.Load() {
+		c.notEmpty.Wait()
+	}
+
+	if c.count.Load() == 0 {
+		var zero T
+		return zero
+	}
+
+	tailPos := c.tail.Load() % c.size
+	value := c.buffer[tailPos]
+
+	// Update positions and counters
+	c.tail.Add(1)
+	c.count.Add(-1)
+
+	// Update current value
+	c.current.Store(value)
+
+	return value
+}
+
+// SendBlocking sends a value to the circular buffer (always succeeds immediately)
+func (c *CycleChannel[T]) SendBlocking(value T) {
+	c.Send(value) // CycleChannel never blocks on send
+}
+
+// BufferSize returns the size of the circular buffer
+func (c *CycleChannel[T]) BufferSize() int { return int(c.size) }
+
+// Version returns the current version number
+func (c *CycleChannel[T]) Version() uint64 {
+	return c.version.Load()
+}
+
+// IsDirty returns true if the value has been modified since last clean
+func (c *CycleChannel[T]) IsDirty() bool {
+	return c.dirty.Load()
+}
+
+// MarkClean marks the value as clean
+func (c *CycleChannel[T]) MarkClean() {
+	c.dirty.Store(false)
+}
+
+// Close safely shuts down the channel
+func (c *CycleChannel[T]) Close() error {
+	if c.closed.CompareAndSwap(false, true) {
+		c.mx.Lock()
+		c.notEmpty.Broadcast() // Wake all waiting receivers
+		c.mx.Unlock()
+	}
+	return nil
+}
+
+// SetBufferSize resizes the buffer while preserving existing data
+func (c *CycleChannel[T]) SetBufferSize(size int) error {
+	if size <= 0 {
+		return fmt.Errorf("buffer size must be positive")
+	}
+
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
+	if c.closed.Load() {
+		return fmt.Errorf("channel is closed")
+	}
+
+	newBuffer := make([]T, size)
+	currentCount := c.count.Load()
+
+	// Calculate how many items we can preserve
+	preserveCount := currentCount
+	if preserveCount > int32(size) {
+		preserveCount = int32(size)
+		// If shrinking, keep most recent items
+		c.tail.Add(uint32(currentCount - preserveCount))
+	}
+
+	// Copy existing data
+	for i := int32(0); i < preserveCount; i++ {
+		pos := (c.tail.Load() + uint32(i)) % c.size
+		newBuffer[i] = c.buffer[pos]
+	}
+
+	// Update state
+	c.buffer = newBuffer
+	c.size = uint32(size)
+	c.head.Store(uint32(preserveCount))
+	c.tail.Store(0)
+	c.count.Store(preserveCount)
+	c.version.Add(1)
+	c.dirty.Store(true)
+
+	return nil
+}
+
+// Peek returns the next value without removing it
+func (c *CycleChannel[T]) Peek() (T, bool) {
+	c.mx.RLock()
+	defer c.mx.RUnlock()
+
+	if c.count.Load() == 0 {
+		var zero T
+		return zero, false
+	}
+
+	tailPos := c.tail.Load() % c.size
+	return c.buffer[tailPos], true
+}
+
+// DrainAll removes and returns all current items
+func (c *CycleChannel[T]) DrainAll() []T {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
+	count := int(c.count.Load())
+	if count == 0 {
+		return nil
+	}
+
+	result := make([]T, count)
+	for i := 0; i < count; i++ {
+		pos := (c.tail.Load() + uint32(i)) % c.size
+		result[i] = c.buffer[pos]
+	}
+
+	// Reset buffer state
+	c.head.Store(0)
+	c.tail.Store(0)
+	c.count.Store(0)
+	c.version.Add(1)
+	c.dirty.Store(true)
+
+	return result
+}

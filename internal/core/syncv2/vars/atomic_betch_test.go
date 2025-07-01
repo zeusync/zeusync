@@ -7,10 +7,10 @@ import (
 	"unsafe"
 )
 
-type operationType int
+type atomicOperationType int
 
 const (
-	OpSet operationType = iota
+	OpSet atomicOperationType = iota
 	OpGet
 	OpSwap
 )
@@ -168,7 +168,7 @@ func runAtomicBenchmarks[T any](
 
 	operations := []struct {
 		name string
-		op   operationType
+		op   atomicOperationType
 	}{
 		{"Set", OpSet},
 		{"Get", OpGet},
@@ -181,17 +181,17 @@ func runAtomicBenchmarks[T any](
 		for _, mode := range modes {
 			benchName := name + " | " + operation.name + " | " + mode
 			b.Run(benchName, func(b *testing.B) {
-				runBenchmark(b, root, values, operation.op, mode)
+				runAtomicBenchmark(b, root, values, operation.op, mode)
 			})
 		}
 	}
 }
 
-func runBenchmark[T any](
+func runAtomicBenchmark[T any](
 	b *testing.B,
 	root sync.AtomicRoot[T],
 	values []T,
-	operation operationType,
+	operation atomicOperationType,
 	mode string,
 ) {
 	b.ReportAllocs()
@@ -306,7 +306,7 @@ func runReproducibleBenchmarks[T any](
 
 	operations := []struct {
 		name string
-		op   operationType
+		op   atomicOperationType
 	}{
 		{"Set", OpSet},
 		{"Get", OpGet},
@@ -319,7 +319,7 @@ func runReproducibleBenchmarks[T any](
 		for _, mode := range modes {
 			benchName := name + " | " + operation.name + " | " + mode
 			b.Run(benchName, func(b *testing.B) {
-				runBenchmark(b, root, values, operation.op, mode)
+				runAtomicBenchmark(b, root, values, operation.op, mode)
 			})
 		}
 	}

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestBufferedChannel(t *testing.T) {
+func TestChannelVars(t *testing.T) {
 	t.Run("BufferedChannel: Basic functionality", func(t *testing.T) {
 		// Test basic functionality
 		ch := NewBufferedChannel[string](5, "initial")
@@ -41,9 +41,7 @@ func TestBufferedChannel(t *testing.T) {
 		ch.Set("dirty_test")
 		require.True(t, ch.IsDirty())
 	})
-}
 
-func TestUnbufferedChannel(t *testing.T) {
 	t.Run("UnbufferedChannel: Basic functionality", func(t *testing.T) {
 		// Test basic functionality
 		ch := NewUnbufferedChannel[string]("initial")
@@ -77,9 +75,7 @@ func TestUnbufferedChannel(t *testing.T) {
 		// Test SetBufferSize should fail
 		require.Error(t, ch.SetBufferSize(10))
 	})
-}
 
-func TestPriorityChannel(t *testing.T) {
 	t.Run("PriorityChannel: Basic functionality", func(t *testing.T) {
 		const maxSize = 3
 		ch := NewPriorityChannel[string](maxSize, "initial")
@@ -118,9 +114,7 @@ func TestPriorityChannel(t *testing.T) {
 		// Test buffer size
 		require.Equal(t, maxSize, ch.BufferSize())
 	})
-}
 
-func TestBroadcastChannel(t *testing.T) {
 	t.Run("BroadcastChannel: Basic functionality", func(t *testing.T) {
 		ch := NewBroadcastChannel[int](3, 0)
 
@@ -165,23 +159,41 @@ func TestBroadcastChannel(t *testing.T) {
 			// Expected - sub1 should not receive
 		}
 	})
+
+	t.Run("CycleChannel: Basic functionality", func(t *testing.T) {
+		const valuesAmount = 10
+		ch := NewCycleChannel[int](valuesAmount, 0)
+
+		for i := 0; i < valuesAmount; i++ {
+			require.True(t, ch.Send(i))
+		}
+
+		for i := 1; i <= valuesAmount; i++ {
+			value, ok := ch.Receive()
+			require.True(t, ok)
+			require.Less(t, value, i)
+		}
+	})
 }
 
 func TestChannelConcurrency(t *testing.T) {
-	t.Run("BufferedChanel: Concurrent send and receive ", func(t *testing.T) {
-		ch := NewBufferedChannel[int](100, 0)
+	const (
+		numSenders      = 10
+		numReceivers    = 100
+		valuesPerSender = 10
+	)
 
-		const numGoroutines = 10
-		const numOperations = 100
+	t.Run("BufferedChanel: Concurrent send and receive ", func(t *testing.T) {
+		ch := NewBufferedChannel[int](numSenders, 0)
 
 		var wg sync.WaitGroup
 
-		// Start writers
-		for i := 0; i < numGoroutines; i++ {
+		// Start senders
+		for i := 0; i < numSenders; i++ {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < numOperations; j++ {
+				for j := 0; j < numReceivers; j++ {
 					ch.Send(id*1000 + j)
 				}
 			}(i)
@@ -191,11 +203,11 @@ func TestChannelConcurrency(t *testing.T) {
 		received := make(map[int]bool)
 		var mu sync.Mutex
 
-		for i := 0; i < numGoroutines; i++ {
+		for i := 0; i < numSenders; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for j := 0; j < numOperations; j++ {
+				for j := 0; j < numReceivers; j++ {
 					if value, ok := ch.Receive(); ok {
 						mu.Lock()
 						received[value] = true
@@ -213,13 +225,221 @@ func TestChannelConcurrency(t *testing.T) {
 		mu.Unlock()
 
 		require.Greater(t, receivedCount, 0)
-		t.Logf("Received %d unique values out of %d sent", receivedCount, numGoroutines*numOperations)
+		t.Logf("Received %d unique values out of %d sent", receivedCount, numSenders*numReceivers)
+	})
+
+	t.Run("UnbufferedChannel: Concurrent send and receive", func(t *testing.T) {
+		ch := NewUnbufferedChannel[int](0)
+
+		var sWg, rWg sync.WaitGroup
+		received := make(map[int]bool)
+		var mu sync.Mutex
+
+		// Start receivers first
+		for i := 0; i < numReceivers; i++ {
+			rWg.Add(1)
+			go func() {
+				defer rWg.Done()
+				for j := 0; j < numSenders*valuesPerSender/numReceivers; j++ {
+					value := ch.ReceiveBlocking()
+					mu.Lock()
+					received[value] = true
+					mu.Unlock()
+				}
+			}()
+		}
+
+		// Then start senders
+		for i := 0; i < numSenders; i++ {
+			sWg.Add(1)
+			go func(id int) {
+				defer sWg.Done()
+				for j := 0; j < valuesPerSender; j++ {
+					ch.Send(id*1000 + j)
+				}
+			}(i)
+		}
+
+		sWg.Wait()
+		rWg.Wait()
+
+		mu.Lock()
+		receivedCount := len(received)
+		mu.Unlock()
+
+		require.Greater(t, receivedCount, 0, "No values were received")
+		t.Logf("Received %d unique values out of %d sent", receivedCount, numSenders*valuesPerSender)
+	})
+
+	t.Run("PriorityChannel: Concurrent send and receive", func(t *testing.T) {
+		ch := NewPriorityChannel[int](numSenders*valuesPerSender, 0)
+
+		var sWg, rWg sync.WaitGroup
+		received := make(map[int]bool)
+		var mu sync.Mutex
+
+		// Start receivers first
+		for i := 0; i < numReceivers; i++ {
+			rWg.Add(1)
+			go func() {
+				defer rWg.Done()
+				for j := 0; j < numSenders*valuesPerSender/numReceivers; j++ {
+					value := ch.ReceiveBlocking()
+					mu.Lock()
+					received[value] = true
+					mu.Unlock()
+				}
+			}()
+		}
+
+		// Then start senders
+		for i := 0; i < numSenders; i++ {
+			sWg.Add(1)
+			go func(id int) {
+				defer sWg.Done()
+				for j := 0; j < valuesPerSender; j++ {
+					v := id*1000 + j
+					ch.SendWithPriority(v, v)
+				}
+			}(i)
+		}
+
+		sWg.Wait()
+		rWg.Wait()
+
+		mu.Lock()
+		receivedCount := len(received)
+		mu.Unlock()
+
+		require.Greater(t, receivedCount, 0, "No values were received")
+		t.Logf("Received %d unique values out of %d sent", receivedCount, numSenders*valuesPerSender)
+	})
+
+	t.Run("CycleChannel: Concurrent send and receive", func(t *testing.T) {
+		ch := NewCycleChannel[int](numSenders, 5)
+
+		var sWg, rWg sync.WaitGroup
+		received := make(map[int]bool)
+		var mu sync.Mutex
+		stop := make(chan struct{})
+
+		for i := 0; i < numReceivers; i++ {
+			rWg.Add(1)
+			go func() {
+				defer rWg.Done()
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+						if value, ok := ch.Receive(); ok {
+							mu.Lock()
+							received[value] = true
+							mu.Unlock()
+						}
+						time.Sleep(5 * time.Millisecond)
+					}
+				}
+			}()
+		}
+
+		for i := 0; i < numSenders; i++ {
+			sWg.Add(1)
+			go func(id int) {
+				defer sWg.Done()
+				for j := 0; j < valuesPerSender; j++ {
+					ch.Send(id*1000 + j)
+				}
+			}(i)
+		}
+
+		sWg.Wait()
+		time.Sleep(100 * time.Millisecond)
+		close(stop)
+		rWg.Wait()
+
+		mu.Lock()
+		receivedCount := len(received)
+		mu.Unlock()
+
+		require.Greater(t, receivedCount, 0, "No values were received")
+
+		t.Logf("Received %d unique values out of %d sent", receivedCount, numSenders*valuesPerSender)
 	})
 }
 
-func TestPriorityChannelBlocking(t *testing.T) {
+func TestChannelBlocking(t *testing.T) {
+	t.Run("BufferedChannel: Blocking send and receive", func(t *testing.T) {
+		ch := NewBufferedChannel[string](2, "initial")
+
+		// Test blocking send and receive
+		var wg sync.WaitGroup
+
+		// Start a receiver
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			value := ch.ReceiveBlocking()
+			require.Equal(t, "test", value)
+		}()
+
+		// Give receiver time to start
+		time.Sleep(10 * time.Millisecond)
+
+		// Send value (should unblock receiver)
+		ch.SendBlocking("test")
+
+		wg.Wait()
+	})
+
+	t.Run("UnbufferedChannel: Blocking send and receive", func(t *testing.T) {
+		ch := NewUnbufferedChannel[string]("initial")
+
+		// Test blocking send and receive
+		var wg sync.WaitGroup
+
+		// Start a receiver
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			value := ch.ReceiveBlocking()
+			require.Equal(t, "test", value)
+		}()
+
+		// Give receiver time to start
+		time.Sleep(10 * time.Millisecond)
+
+		// Send value (should unblock receiver)
+		ch.SendBlocking("test")
+
+		wg.Wait()
+	})
+
 	t.Run("PriorityChannel: Blocking send and receive", func(t *testing.T) {
 		ch := NewPriorityChannel[string](2, "initial")
+
+		// Test blocking send and receive
+		var wg sync.WaitGroup
+
+		// Start a receiver
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			value := ch.ReceiveBlocking()
+			require.Equal(t, "test", value)
+		}()
+
+		// Give receiver time to start
+		time.Sleep(10 * time.Millisecond)
+
+		// Send value (should unblock receiver)
+		ch.SendBlocking("test")
+
+		wg.Wait()
+	})
+
+	t.Run("CycleChannel: Blocking send and receive", func(t *testing.T) {
+		ch := NewCycleChannel[string](5, "initial")
 
 		// Test blocking send and receive
 		var wg sync.WaitGroup
@@ -245,6 +465,55 @@ func TestPriorityChannelBlocking(t *testing.T) {
 func TestChannelClose(t *testing.T) {
 	t.Run("BufferedChannel: Close", func(t *testing.T) {
 		ch := NewBufferedChannel[string](5, "initial")
+
+		// Test that ch works before close
+		require.True(t, ch.Send("test"))
+
+		// Close the ch
+		require.NoError(t, ch.Close(), "Close should not fail")
+
+		// Test that Send fails after close
+		require.False(t, ch.Send("after_close"))
+	})
+
+	t.Run("UnbufferedChannel: Close", func(t *testing.T) {
+		ch := NewUnbufferedChannel[string]("initial")
+
+		// Close the ch
+		require.NoError(t, ch.Close(), "Close should not fail")
+
+		// Test that Send fails after close
+		require.False(t, ch.Send("after_close"))
+	})
+
+	t.Run("PriorityChannel: Close", func(t *testing.T) {
+		ch := NewPriorityChannel[string](5, "initial")
+
+		// Test that ch works before close
+		require.True(t, ch.Send("test"))
+
+		// Close the ch
+		require.NoError(t, ch.Close(), "Close should not fail")
+
+		// Test that Send fails after close
+		require.False(t, ch.Send("after_close"))
+	})
+
+	t.Run("BroadcastChannel: Close", func(t *testing.T) {
+		ch := NewBroadcastChannel[string](5, "initial")
+
+		// Test that ch works before close
+		require.True(t, ch.Send("test"))
+
+		// Close the ch
+		require.NoError(t, ch.Close(), "Close should not fail")
+
+		// Test that Send fails after close
+		require.False(t, ch.Send("after_close"))
+	})
+
+	t.Run("CycleChannel: Close", func(t *testing.T) {
+		ch := NewCycleChannel[string](5, "initial")
 
 		// Test that ch works before close
 		require.True(t, ch.Send("test"))

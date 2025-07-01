@@ -1,127 +1,58 @@
 package vars
 
 import (
+	sync2 "github.com/zeusync/zeusync/internal/core/syncv2"
+	"math/rand"
 	"sync"
 	"testing"
 )
 
-func BenchmarkBufferedChannelVar_Send(b *testing.B) {
-	ch := NewBufferedChannel[int](1000, 0)
+type channelOperationType uint8
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			ch.Send(i)
-			i++
-		}
-	})
+const (
+	OpSend channelOperationType = iota
+	OpReceive
+	OpClose
+)
+
+func Benchmark_BufferedChannel(b *testing.B) {
+	runChannelBenchmarks(b,
+		"BufferedChannel",
+		NewBufferedChannel[int](1000, 0),
+		func() int { return rand.Intn(1_000) },
+		1_000,
+	)
 }
 
-func BenchmarkBufferedChannelVar_Receive(b *testing.B) {
-	ch := NewBufferedChannel[int](1000, 0)
-
-	// Pre-fill the ch
-	for i := 0; i < 1000; i++ {
-		ch.Send(i)
-	}
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			if _, ok := ch.Receive(); !ok {
-				// Refill if empty
-				for i := 0; i < 100; i++ {
-					ch.Send(i)
-				}
-			}
-		}
-	})
+func Benchmark_UnbufferedChannel(b *testing.B) {
+	runChannelBenchmarks[int](b,
+		"UnbufferedChannel",
+		NewUnbufferedChannel[int](0),
+		func() int { return rand.Intn(1_000) },
+		1_000,
+	)
 }
 
-func BenchmarkBufferedChannelVar_GetSet(b *testing.B) {
-	ch := NewBufferedChannel[int](10, 0)
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			ch.Set(i)
-			_ = ch.Get()
-			i++
-		}
-	})
+func Benchmark_PriorityChannel(b *testing.B) {
+	runChannelBenchmarks[int](b,
+		"PriorityChannel",
+		NewPriorityChannel[int](1000, 0),
+		func() int { return rand.Intn(1_000) },
+		1_000,
+	)
 }
 
-func BenchmarkPriorityChannelVar_Send(b *testing.B) {
-	ch := NewPriorityChannel[int](1000, 0)
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			ch.SendWithPriority(i, i%10)
-			i++
-		}
-	})
-}
-
-func BenchmarkPriorityChannelVar_Receive(b *testing.B) {
-	ch := NewPriorityChannel[int](1000, 0)
-
-	// Pre-fill the ch
-	for i := 0; i < 1000; i++ {
-		ch.SendWithPriority(i, i%10)
-	}
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			if _, ok := ch.Receive(); !ok {
-				// Refill if empty
-				for i := 0; i < 100; i++ {
-					ch.SendWithPriority(i, i%10)
-				}
-			}
-		}
-	})
-}
-
-func BenchmarkBroadcastChannelVar_Send(b *testing.B) {
-	ch := NewBroadcastChannel[int](10, 0)
-
-	// Add some subscribers
-	for i := 0; i < 5; i++ {
-		sub := ch.Subscribe()
-		sub.Channel()
-	}
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			ch.Send(i)
-			i++
-		}
-	})
-}
-
-func BenchmarkUnbufferedChannelVar_GetSet(b *testing.B) {
-	ch := NewUnbufferedChannel[int](0)
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			ch.Set(i)
-			_ = ch.Get()
-			i++
-		}
-	})
+func Benchmark_CycleChannel(b *testing.B) {
+	runChannelBenchmarks[int](b,
+		"CycleChannel",
+		NewCycleChannel[int](1000, 0),
+		func() int { return rand.Intn(1_000) },
+		1_000,
+	)
 }
 
 // Comparison benchmarks
-func BenchmarkChannelVar_Comparison(b *testing.B) {
+func BenchmarkChannel_Comparison(b *testing.B) {
 	b.Run("BufferedChannel", func(b *testing.B) {
 		ch := NewBufferedChannel[int](100, 0)
 		benchmarkChannelOperations(b, ch)
@@ -140,6 +71,111 @@ func BenchmarkChannelVar_Comparison(b *testing.B) {
 	b.Run("BroadcastChannel", func(b *testing.B) {
 		ch := NewBroadcastChannel[int](100, 0)
 		benchmarkChannelOperations(b, ch)
+	})
+
+	b.Run("CycleChannel", func(b *testing.B) {
+		ch := NewCycleChannel[int](100, 0)
+		benchmarkChannelOperations(b, ch)
+	})
+}
+
+// Memory allocation benchmarks
+func BenchmarkChannel_Memory(b *testing.B) {
+	b.ResetTimer()
+	b.Run("BufferedChannel_Alloc", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			ch := NewBufferedChannel[string](10, "test")
+			_ = ch
+		}
+	})
+
+	b.Run("UnbufferedChannel_Alloc", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			ch := NewUnbufferedChannel[string]("test")
+			_ = ch
+		}
+	})
+
+	b.Run("PriorityChannel_Alloc", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			ch := NewPriorityChannel[string](10, "test")
+			_ = ch
+		}
+	})
+
+	b.Run("BroadcastChannel_Alloc", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			ch := NewBroadcastChannel[string](10, "test")
+			_ = ch
+		}
+	})
+
+	b.Run("CycleChannel_Alloc", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			ch := NewCycleChannel[string](10, "test")
+			_ = ch
+		}
+	})
+}
+
+// Concurrent access benchmarks
+func BenchmarkChannel_Concurrent(b *testing.B) {
+	b.Run("BufferedChannel_Concurrent", func(b *testing.B) {
+		ch := NewBufferedChannel[int](1000, 0)
+		benchmarkConcurrentAccess(b, ch)
+	})
+
+	b.Run("UnbufferedChannel_Concurrent", func(b *testing.B) {
+		ch := NewUnbufferedChannel[int](1000)
+		benchmarkConcurrentAccess(b, ch)
+	})
+
+	b.Run("PriorityChannel_Concurrent", func(b *testing.B) {
+		ch := NewPriorityChannel[int](1000, 0)
+		benchmarkConcurrentAccess(b, ch)
+	})
+
+	b.Run("BroadcastChannel_Concurrent", func(b *testing.B) {
+		ch := NewBroadcastChannel[int](1000, 0)
+		benchmarkConcurrentAccess(b, ch)
+	})
+
+	b.Run("CycleChannel_Concurrent", func(b *testing.B) {
+		ch := NewCycleChannel[int](1000, 0)
+		benchmarkConcurrentAccess(b, ch)
+	})
+}
+
+// Throughput benchmarks
+func BenchmarkChannel_Throughput(b *testing.B) {
+	b.Run("BufferedChannel_Throughput", func(b *testing.B) {
+		ch := NewBufferedChannel[int](10000, 0)
+		benchmarkThroughput(b, ch)
+	})
+
+	b.Run("UnbufferedChannel_Throughput", func(b *testing.B) {
+		ch := NewUnbufferedChannel[int](0)
+		benchmarkThroughput(b, ch)
+	})
+
+	b.Run("PriorityChannel_Throughput", func(b *testing.B) {
+		ch := NewPriorityChannel[int](10000, 0)
+		benchmarkThroughput(b, ch)
+	})
+
+	b.Run("BroadcastChannel_Throughput", func(b *testing.B) {
+		ch := NewBroadcastChannel[int](10000, 0)
+		benchmarkThroughput(b, ch)
+	})
+
+	b.Run("CycleChannel_Throughput", func(b *testing.B) {
+		ch := NewCycleChannel[int](10000, 0)
+		benchmarkThroughput(b, ch)
 	})
 }
 
@@ -166,52 +202,6 @@ func benchmarkChannelOperations(b *testing.B, ch interface {
 	})
 }
 
-// Memory allocation benchmarks
-func BenchmarkChannelVar_Memory(b *testing.B) {
-	b.ResetTimer()
-	b.Run("BufferedChannel_Alloc", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			ch := NewBufferedChannel[string](10, "test")
-			_ = ch
-		}
-	})
-
-	b.Run("PriorityChannel_Alloc", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			ch := NewPriorityChannel[string](10, "test")
-			_ = ch
-		}
-	})
-
-	b.Run("BroadcastChannel_Alloc", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			ch := NewBroadcastChannel[string](10, "test")
-			_ = ch
-		}
-	})
-}
-
-// Concurrent access benchmarks
-func BenchmarkChannelVar_Concurrent(b *testing.B) {
-	b.Run("BufferedChannel_Concurrent", func(b *testing.B) {
-		ch := NewBufferedChannel[int](1000, 0)
-		benchmarkConcurrentAccess(b, ch)
-	})
-
-	b.Run("UnbufferedChannel_Concurrent", func(b *testing.B) {
-		ch := NewUnbufferedChannel[int](1000)
-		benchmarkConcurrentAccess(b, ch)
-	})
-
-	b.Run("PriorityChannel_Concurrent", func(b *testing.B) {
-		ch := NewPriorityChannel[int](1000, 0)
-		benchmarkConcurrentAccess(b, ch)
-	})
-}
-
 func benchmarkConcurrentAccess(b *testing.B, ch interface {
 	Get() int
 	Set(int)
@@ -220,6 +210,7 @@ func benchmarkConcurrentAccess(b *testing.B, ch interface {
 }) {
 	const numGoroutines = 10
 
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	var wg sync.WaitGroup
@@ -251,24 +242,12 @@ func benchmarkConcurrentAccess(b *testing.B, ch interface {
 	wg.Wait()
 }
 
-// Throughput benchmarks
-func BenchmarkChannelVar_Throughput(b *testing.B) {
-	b.Run("BufferedChannel_Throughput", func(b *testing.B) {
-		ch := NewBufferedChannel[int](10000, 0)
-		benchmarkThroughput(b, ch)
-	})
-
-	b.Run("PriorityChannel_Throughput", func(b *testing.B) {
-		ch := NewPriorityChannel[int](10000, 0)
-		benchmarkThroughput(b, ch)
-	})
-}
-
 func benchmarkThroughput(b *testing.B, ch interface {
 	Send(int) bool
 	Receive() (int, bool)
 }) {
-	// Producer
+	b.ReportAllocs()
+	// Produce
 	go func() {
 		for i := 0; ; i++ {
 			ch.Send(i)
@@ -277,8 +256,95 @@ func benchmarkThroughput(b *testing.B, ch interface {
 
 	b.ResetTimer()
 
-	// Consumer
+	// Consume
 	for i := 0; i < b.N; i++ {
 		ch.Receive()
+	}
+}
+
+func runChannelBenchmarks[T any](
+	b *testing.B,
+	name string,
+	root sync2.ChannelRoot[T],
+	valueGenerator func() T,
+	poolSize int,
+) {
+	values := generateValues(valueGenerator, poolSize)
+
+	operations := []struct {
+		name string
+		op   channelOperationType
+	}{
+		{"Send", OpSend},
+		{"Receive", OpReceive},
+		{"Close", OpClose},
+	}
+
+	modes := []string{Sync, Async}
+
+	for _, operation := range operations {
+		for _, mode := range modes {
+			benchName := name + " | " + operation.name + " | " + mode
+			b.Run(benchName, func(b *testing.B) {
+				runChannelBenchmark(b, root, values, operation.op, mode)
+			})
+		}
+	}
+}
+
+func runChannelBenchmark[T any](
+	b *testing.B,
+	root sync2.ChannelRoot[T],
+	values []T,
+	operation channelOperationType,
+	mode string,
+) {
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	valuesLen := len(values)
+
+	if mode == Sync {
+		switch operation {
+		case OpSend:
+			for i := 0; i < b.N; i++ {
+				_ = root.Send(values[i%valuesLen])
+			}
+		case OpReceive:
+			for i := 0; i < b.N; i++ {
+				_, _ = root.Receive()
+			}
+		case OpClose:
+			for i := 0; i < b.N; i++ {
+				_ = root.Close()
+			}
+		}
+	} else {
+		switch operation {
+		case OpSend:
+			b.RunParallel(func(pb *testing.PB) {
+				i := 0
+				for pb.Next() {
+					_ = root.Send(values[i%valuesLen])
+					i++
+				}
+			})
+		case OpReceive:
+			b.RunParallel(func(pb *testing.PB) {
+				i := 0
+				for pb.Next() {
+					_, _ = root.Receive()
+					i++
+				}
+			})
+		case OpClose:
+			b.RunParallel(func(pb *testing.PB) {
+				i := 0
+				for pb.Next() {
+					_ = root.Close()
+					i++
+				}
+			})
+		}
 	}
 }

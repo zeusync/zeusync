@@ -127,7 +127,7 @@ func (f *DefaultFactory[T]) CreateShardedRoot(initialValue T, shardCount int) sy
 
 // CreateChannelRoot creates a channel-based root implementation
 func (f *DefaultFactory[T]) CreateChannelRoot(initialValue T, bufferSize int) sync.ChannelRoot[T] {
-	switch f.config.ChannelImpl {
+	switch f.config.ChannelType {
 	case types.BufferedChannel:
 		return vars.NewBufferedChannel[T](bufferSize, initialValue)
 	case types.UnbufferedChannel:
@@ -265,8 +265,8 @@ func (f *VariableFactory[T]) CreateVariable(strategy types.StorageStrategy, init
 // GlobalFactory provides a global factory instance for convenience
 var GlobalFactory = NewDefaultFactory[any](types.Configuration{
 	AtomicType:  types.AtomicValue,
-	MutexImpl:   types.StandardMutex,
-	ShardedImpl: types.HashSharded,
+	MutexType:   types.StandardMutex,
+	ShardedType: types.HashSharded,
 	ShardCount:  16,
 })
 
