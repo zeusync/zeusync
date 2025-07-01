@@ -2,6 +2,8 @@ package wrappers
 
 import (
 	"encoding/binary"
+	"github.com/zeusync/zeusync/pkg/concurrent"
+	"github.com/zeusync/zeusync/pkg/sequence"
 	sc "sync"
 	"time"
 
@@ -46,16 +48,24 @@ func (w *AtomicWrapper[T]) Set(value T) {
 	w.metrics.Writes++
 
 	// Notify subscribers
+	concurrent.Batch(sequence.From(w.subscribers), 3, func(batch []func(T, T)) {
+		for _, callback := range batch {
+			if callback != nil {
+				go callback(old, value)
+			}
+		}
+	})
 
-	go func() {
+	// Old version
+	/*go func() {
 		w.mx.RLock()
 		for _, callback := range w.subscribers {
 			if callback != nil {
-				callback(old, value)
+				go callback(old, value)
 			}
 		}
 		w.mx.RUnlock()
-	}()
+	}()*/
 }
 
 func (w *AtomicWrapper[T]) Version() uint64 {
@@ -73,6 +83,8 @@ func (w *AtomicWrapper[T]) MarkClean() {
 // Networked interface implementation
 
 func (w *AtomicWrapper[T]) Delta(since uint64) sync.Delta[T] {
+	w.mx.Lock()
+	defer w.mx.Unlock()
 	if since < w.Version() {
 		w.metrics.DeltasSent++
 		return sync.Delta[T]{
@@ -86,26 +98,10 @@ func (w *AtomicWrapper[T]) Delta(since uint64) sync.Delta[T] {
 }
 
 func (w *AtomicWrapper[T]) ApplyDelta(deltas ...sync.Delta[T]) error {
-	for _, delta := range deltas {
-		if delta.Version > w.Version() {
-			if w.resolver != nil {
-				// Use conflict resolver if available
-				resolved := w.resolver.Resolve(w.Get(), delta.Value, sync.ConflictMetadata{
-					LocalVersion:  w.Version(),
-					RemoteVersion: delta.Version,
-					LocalTime:     time.Now().UnixNano(),
-					RemoteTime:    delta.Timestamp,
-					ClientID:      delta.ClientID,
-				})
-				w.Set(resolved)
-				w.metrics.DeltasReceived++
-			} else {
-				// Last-write-wins by default
-				w.Set(delta.Value)
-			}
-			w.metrics.Conflicts++
-		}
-	}
+	w.mx.Lock()
+	defer w.mx.Unlock()
+	w.root.ApplyDeltas(deltas...)
+	w.metrics.DeltasReceived++
 	return nil
 }
 

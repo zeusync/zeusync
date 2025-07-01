@@ -9,12 +9,15 @@ import (
 
 // Root provides a clean, simple interface for synchronized variables
 type Root[T any] interface {
+	// Get returns the current value
 	Get() T
+	// Set updates the value
 	Set(T)
-
+	// Version returns the current version number
 	Version() uint64
-
+	// IsDirty returns true if the value has been modified since last clean
 	IsDirty() bool
+	// MarkClean marks the value as clean
 	MarkClean()
 }
 
@@ -45,8 +48,8 @@ type Observable[T any] interface {
 
 // Permissioned provides a clean, simple interface for managing permissions for variable access.
 type Permissioned interface {
-	CheckRead(clientID string) bool
-	CheckWrite(clientID string) bool
+	CheckRead(identifier string) bool
+	CheckWrite(identifier string) bool
 	SetPermissions(permissions Permissions)
 }
 

@@ -127,8 +127,19 @@ func (f *DefaultFactory[T]) CreateShardedRoot(initialValue T, shardCount int) sy
 
 // CreateChannelRoot creates a channel-based root implementation
 func (f *DefaultFactory[T]) CreateChannelRoot(initialValue T, bufferSize int) sync.ChannelRoot[T] {
-	// TODO: Implement channel-based root
-	panic("ChannelRoot not implemented yet")
+	switch f.config.ChannelImpl {
+	case types.BufferedChannel:
+		return vars.NewBufferedChannel[T](bufferSize, initialValue)
+	case types.UnbufferedChannel:
+		return vars.NewUnbufferedChannel[T](initialValue)
+	case types.PriorityChannel:
+		return vars.NewPriorityChannel[T](bufferSize, initialValue)
+	case types.BroadcastChannel:
+		return vars.NewBroadcastChannel[T](bufferSize, initialValue)
+	default:
+		// Default to buffered channel
+		return vars.NewBufferedChannel[T](bufferSize, initialValue)
+	}
 }
 
 // CreateLockFreeRoot creates a lock-free root implementation
@@ -227,6 +238,14 @@ func (f *VariableFactory[T]) CreateVariable(strategy types.StorageStrategy, init
 	case types.StrategyMutex:
 		/*mutexRoot := f.rootFactory.CreateMutexRoot(initialValue)
 		core = wrappers.NewMutexWrapper(mutexRoot) */ // TODO: Implement MutexWrapper
+
+	case types.StrategyChannels:
+		bufferSize := 10 // default
+		if len(options) > 0 && options[0].Config.BufferSize > 0 {
+			bufferSize = options[0].Config.BufferSize
+		}
+		channelRoot := f.rootFactory.CreateChannelRoot(initialValue, bufferSize)
+		core = wrappers.NewChannelWrapper(channelRoot)
 
 	case types.StrategySharded:
 		/*shardCount := 16 // default

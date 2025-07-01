@@ -38,7 +38,7 @@ type Message interface {
 	Unmarshal([]byte) error
 	Clone() Message
 
-	// Size and limits
+	// Len and limits
 
 	Size() int
 	MaxSize() int

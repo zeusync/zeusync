@@ -87,6 +87,9 @@ type ChannelRoot[T any] interface {
 
 	// SetBufferSize sets the buffer size (if supported)
 	SetBufferSize(size int) error
+
+	// Close closes the channel and releases resources
+	Close() error
 }
 
 // LockFreeRoot defines the interface for lock-free variable implementations.
