@@ -3,15 +3,16 @@ package vars
 import (
 	"context"
 	"fmt"
+	"github.com/zeusync/zeusync/internal/core/syncv2/types"
 	"strconv"
 	"testing"
 	"time"
 )
 
 func BenchmarkSharded(b *testing.B) {
-	var keys = make([]string, defaultPoolSize)
-	var values = make([]int, defaultPoolSize)
-	for i := 0; i < defaultPoolSize; i++ {
+	var keys = make([]string, types.defaultPoolSize)
+	var values = make([]int, types.defaultPoolSize)
+	for i := 0; i < types.defaultPoolSize; i++ {
 		keys[i] = fmt.Sprintf("key-%d", i)
 		values[i] = i
 	}
@@ -73,7 +74,7 @@ func benchmarkShardedImpl(b *testing.B, v interface {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				v.Set(values[i%defaultPoolSize])
+				v.Set(values[i%types.defaultPoolSize])
 			}
 		})
 
@@ -84,7 +85,7 @@ func benchmarkShardedImpl(b *testing.B, v interface {
 			b.RunParallel(func(pb *testing.PB) {
 				i := 0
 				for pb.Next() {
-					v.Set(values[i%defaultPoolSize])
+					v.Set(values[i%types.defaultPoolSize])
 					i++
 				}
 			})
@@ -97,7 +98,7 @@ func benchmarkShardedImpl(b *testing.B, v interface {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				_ = v.GetShard(keys[i%defaultPoolSize])
+				_ = v.GetShard(keys[i%types.defaultPoolSize])
 			}
 		})
 
@@ -108,7 +109,7 @@ func benchmarkShardedImpl(b *testing.B, v interface {
 			b.RunParallel(func(pb *testing.PB) {
 				i := 0
 				for pb.Next() {
-					_ = v.GetShard(keys[i%defaultPoolSize])
+					_ = v.GetShard(keys[i%types.defaultPoolSize])
 					i++
 				}
 			})
@@ -121,7 +122,7 @@ func benchmarkShardedImpl(b *testing.B, v interface {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				v.SetShard(keys[i%defaultPoolSize], values[i%defaultPoolSize])
+				v.SetShard(keys[i%types.defaultPoolSize], values[i%types.defaultPoolSize])
 			}
 		})
 
@@ -132,7 +133,7 @@ func benchmarkShardedImpl(b *testing.B, v interface {
 			b.RunParallel(func(pb *testing.PB) {
 				i := 0
 				for pb.Next() {
-					v.SetShard(keys[i%defaultPoolSize], values[i%defaultPoolSize])
+					v.SetShard(keys[i%types.defaultPoolSize], values[i%types.defaultPoolSize])
 					i++
 				}
 			})

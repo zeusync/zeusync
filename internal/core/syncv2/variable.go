@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"github.com/zeusync/zeusync/pkg/encoding"
 	"time"
 
 	"github.com/zeusync/zeusync/internal/core/syncv2/metrics"
@@ -32,12 +33,6 @@ type Networked[T any] interface {
 	Unmarshal([]byte) error
 }
 
-// Serializable provides a clean, simple interface for serializing and deserializing variables.
-type Serializable[T any] interface {
-	Serialize() ([]byte, error)
-	Deserialize([]byte) error
-}
-
 // Observable provides a clean, simple interface for observing variable changes.
 type Observable[T any] interface {
 	OnChange(func(old, new T))
@@ -58,7 +53,7 @@ type Core[T any] interface {
 	Root[T]
 	Networked[T]
 	Observable[T]
-	Serializable[T]
+	encoding.Serializable[T]
 	Permissioned
 
 	Close() error

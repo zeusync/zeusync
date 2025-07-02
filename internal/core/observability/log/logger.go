@@ -3,6 +3,7 @@ package log
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -11,7 +12,10 @@ import (
 
 var _ Log = (*Logger)(nil)
 
-var logger *Logger
+var (
+	innerLogger          *Logger
+	loggerInitializeOnce sync.Once
+)
 
 type Logger struct {
 	zapLogger *zap.Logger
@@ -39,16 +43,18 @@ func New(level Level) *Logger {
 		panic(err)
 	}
 
-	logger = &Logger{
+	logger := &Logger{
 		zapLogger: zapLogger,
 		zapLevel:  zapLevel,
 	}
+
+	loggerInitializeOnce.Do(func() { innerLogger = logger })
 
 	return logger
 }
 
 func Provide() *Logger {
-	return logger
+	return innerLogger
 }
 
 func (l *Logger) Log(level Level, msg string, fields ...Field) {
@@ -88,7 +94,7 @@ func (l *Logger) With(fields ...Field) Log {
 func (l *Logger) WithContext(_ context.Context) Log {
 	// Zap doesn't have a direct equivalent of WithContext, but you can extract values
 	// from the context and add them as fields.
-	// For now, we return the same logger.
+	// For now, we return the same innerLogger.
 	return l
 }
 
