@@ -118,9 +118,12 @@ type Option struct {
 
 // Permissions defines the read and write permissions for a variable.
 type Permissions struct {
-	Read  map[string]struct{} // Unique list of client IDs with read access
-	Write map[string]struct{} // Unique list of client IDs with write access
+	Read  PermissionSet // Unique list of identifiers with read access
+	Write PermissionSet // Unique list of identifiers with write access
 }
+
+// PermissionSet is a map of identifiers to permissions. Alias for `map[string]struct{}`
+type PermissionSet map[string]struct{}
 
 // HistoryEntry represents a single entry in the history of a variable.
 type HistoryEntry[T any] struct {
