@@ -2,10 +2,11 @@ package wrappers
 
 import (
 	"encoding/binary"
-	"github.com/zeusync/zeusync/pkg/concurrent"
-	"github.com/zeusync/zeusync/pkg/sequence"
 	sc "sync"
 	"time"
+
+	"github.com/zeusync/zeusync/pkg/concurrent"
+	"github.com/zeusync/zeusync/pkg/sequence"
 
 	"github.com/zeusync/zeusync/internal/core/syncv2"
 	"github.com/zeusync/zeusync/internal/core/syncv2/metrics"

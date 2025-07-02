@@ -1,8 +1,9 @@
 package vars
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 const defaultPoolSize = 1_000
@@ -26,7 +27,7 @@ func BenchmarkAtomic(b *testing.B) {
 	b.Run("Atomic[int64]", func(b *testing.B) {
 		v := NewAtomicInt64(0)
 
-		var values = make([]int64, defaultPoolSize)
+		values := make([]int64, defaultPoolSize)
 		for i := 0; i < defaultPoolSize; i++ {
 			values[i] = int64(i)
 		}
@@ -53,7 +54,6 @@ func BenchmarkAtomic(b *testing.B) {
 					}
 				})
 			})
-
 		})
 
 		b.Run("OpGet", func(b *testing.B) {
@@ -76,7 +76,6 @@ func BenchmarkAtomic(b *testing.B) {
 					}
 				})
 			})
-
 		})
 
 		b.Run("OpSwap", func(b *testing.B) {
@@ -101,7 +100,6 @@ func BenchmarkAtomic(b *testing.B) {
 					}
 				})
 			})
-
 		})
 	})
 }

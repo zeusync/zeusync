@@ -3,15 +3,16 @@ package vars
 import (
 	"context"
 	"fmt"
-	"github.com/zeusync/zeusync/internal/core/syncv2/types"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/syncv2/types"
 )
 
 func BenchmarkSharded(b *testing.B) {
-	var keys = make([]string, types.defaultPoolSize)
-	var values = make([]int, types.defaultPoolSize)
+	keys := make([]string, types.defaultPoolSize)
+	values := make([]int, types.defaultPoolSize)
 	for i := 0; i < types.defaultPoolSize; i++ {
 		keys[i] = fmt.Sprintf("key-%d", i)
 		values[i] = i
@@ -44,8 +45,8 @@ func benchmarkShardedImpl(b *testing.B, v interface {
 	GetShardCount() int
 	ForEachShard(func(int, int) bool)
 	MergeShard(func([]int) int) int
-}, keys []string, values []int) {
-
+}, keys []string, values []int,
+) {
 	b.Run("OpGet", func(b *testing.B) {
 		b.Run("Sync", func(b *testing.B) {
 			b.ReportAllocs()
@@ -216,7 +217,8 @@ func BenchmarkSharded_ShardDistribution(b *testing.B) {
 func benchmarkShardDistribution(b *testing.B, v interface {
 	GetShard(string) int
 	SetShard(string, int)
-}, _ int) {
+}, _ int,
+) {
 	keys := make([]string, b.N)
 	for i := 0; i < b.N; i++ {
 		keys[i] = strconv.Itoa(i)
@@ -264,7 +266,8 @@ func BenchmarkSharded_ContentionLevels(b *testing.B) {
 func benchmarkContention(b *testing.B, v interface {
 	GetShard(string) int
 	SetShard(string, int)
-}, contentionLevel int) {
+}, contentionLevel int,
+) {
 	// Create limited set of keys to increase contention
 	keys := make([]string, contentionLevel)
 	for i := 0; i < contentionLevel; i++ {

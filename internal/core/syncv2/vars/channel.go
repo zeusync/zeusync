@@ -2,11 +2,12 @@ package vars
 
 import (
 	"fmt"
+	sc "sync"
+	"sync/atomic"
+
 	"github.com/zeusync/zeusync/internal/core/syncv2"
 	"github.com/zeusync/zeusync/pkg/concurrent"
 	"github.com/zeusync/zeusync/pkg/sequence"
-	sc "sync"
-	"sync/atomic"
 )
 
 // BufferedChannel implements ChannelRoot using buffered Go channels
@@ -76,7 +77,7 @@ func (c *BufferedChannel[T]) Receive() (T, bool) {
 		c.current.Store(value)
 		return value, true
 	default:
-		var zero = new(T)
+		zero := new(T)
 		return *zero, false
 	}
 }
@@ -217,7 +218,7 @@ func (c *UnbufferedChannel[T]) Receive() (T, bool) {
 		c.current.Store(value)
 		return value, true
 	default:
-		var zero = new(T)
+		zero := new(T)
 		return *zero, false
 	}
 }
@@ -353,7 +354,7 @@ func (c *PriorityChannel[T]) Receive() (T, bool) {
 		return value, true
 	}
 
-	var zero = new(T)
+	zero := new(T)
 	return *zero, false
 }
 
@@ -397,7 +398,7 @@ func (c *PriorityChannel[T]) ReceiveBlocking() T {
 
 	if c.queue.IsEmpty() {
 		// Channel was closed
-		var zero = new(T)
+		zero := new(T)
 		return *zero
 	}
 
@@ -407,7 +408,7 @@ func (c *PriorityChannel[T]) ReceiveBlocking() T {
 		return value
 	}
 
-	var zero = new(T)
+	zero := new(T)
 	return *zero
 }
 
@@ -577,7 +578,7 @@ func (c *BroadcastChannel[T]) Send(value T) bool {
 
 // Receive is not supported for broadcast channels
 func (c *BroadcastChannel[T]) Receive() (T, bool) {
-	var zero = new(T)
+	zero := new(T)
 	return *zero, false
 }
 
@@ -602,7 +603,7 @@ func (c *BroadcastChannel[T]) SendBlocking(value T) {
 
 // ReceiveBlocking is not supported for broadcast channels
 func (c *BroadcastChannel[T]) ReceiveBlocking() T {
-	var zero = new(T)
+	zero := new(T)
 	return *zero
 }
 

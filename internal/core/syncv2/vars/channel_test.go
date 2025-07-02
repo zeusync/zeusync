@@ -1,10 +1,11 @@
 package vars
 
 import (
-	"github.com/stretchr/testify/require"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestChannelVars(t *testing.T) {

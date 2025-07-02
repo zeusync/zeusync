@@ -1,9 +1,10 @@
 package vars
 
 import (
+	"sync/atomic"
+
 	sync "github.com/zeusync/zeusync/internal/core/syncv2"
 	"github.com/zeusync/zeusync/pkg/sequence"
-	"sync/atomic"
 )
 
 var _ sync.AtomicRoot[uint64] = (*AtomicUint64)(nil)

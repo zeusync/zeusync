@@ -1,9 +1,10 @@
 package concurrent
 
 import (
+	"sync"
+
 	"github.com/zeusync/zeusync/pkg/sequence"
 	"golang.org/x/sync/errgroup"
-	"sync"
 )
 
 // Concurrent runs the action function for each element of the iterator in a separate goroutine.

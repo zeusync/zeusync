@@ -1,10 +1,11 @@
 package vars
 
 import (
-	sync2 "github.com/zeusync/zeusync/internal/core/syncv2"
 	"math/rand"
 	"sync"
 	"testing"
+
+	sync2 "github.com/zeusync/zeusync/internal/core/syncv2"
 )
 
 type channelOperationType uint8
@@ -185,7 +186,8 @@ func benchmarkChannelOperations(b *testing.B, ch interface {
 	Version() uint64
 	IsDirty() bool
 	MarkClean()
-}) {
+},
+) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
@@ -207,7 +209,8 @@ func benchmarkConcurrentAccess(b *testing.B, ch interface {
 	Set(int)
 	Send(int) bool
 	Receive() (int, bool)
-}) {
+},
+) {
 	const numGoroutines = 10
 
 	b.ReportAllocs()
@@ -245,7 +248,8 @@ func benchmarkConcurrentAccess(b *testing.B, ch interface {
 func benchmarkThroughput(b *testing.B, ch interface {
 	Send(int) bool
 	Receive() (int, bool)
-}) {
+},
+) {
 	b.ReportAllocs()
 	// Produce
 	go func() {

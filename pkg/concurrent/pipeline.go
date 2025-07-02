@@ -1,8 +1,9 @@
 package concurrent
 
 import (
-	"github.com/zeusync/zeusync/pkg/sequence"
 	"sync"
+
+	"github.com/zeusync/zeusync/pkg/sequence"
 )
 
 // PipelineErrorMode defines error handling mode for the pipeline.

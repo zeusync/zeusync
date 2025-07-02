@@ -2,134 +2,271 @@ package fields
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/pkg/encoding"
-	"github.com/zeusync/zeusync/pkg/sequence"
 	"go/types"
 	"time"
+
+	"github.com/zeusync/zeusync/pkg/encoding"
+	"github.com/zeusync/zeusync/pkg/sequence"
 )
 
-// FA is alias for FieldAccessor[T] where T is a specific type.
-type FA[T any] FieldAccessor[T]
-
-// FieldAccessor provides basic methods for accessing and modifying a field.
-// It also includes locking and event subscription methods, atomic and version control methods, serialization methods.
+// FieldAccessor provides thread-safe access to a field value with comprehensive functionality
+// including atomic operations, versioning, event subscriptions, and serialization support.
+// It is designed for high-concurrency scenarios where multiple goroutines need to safely
+// access and modify shared state.
 type FieldAccessor[T any] interface {
-	// Basic methods
+	// Basic access methods
 
+	// Get returns the current value stored in the field.
+	// This operation is atomic and thread-safe.
 	Get() T
+
+	// Set updates the field value and notifies all subscribers.
+	// This operation is atomic and thread-safe.
 	Set(T)
 
-	// Locking methods
+	// Locking methods for manual synchronization
 
+	// Lock acquires an exclusive lock on the field accessor.
+	// Use this when you need to perform multiple operations atomically.
 	Lock()
+
+	// Unlock releases the exclusive lock on the field accessor.
 	Unlock()
+
+	// RLock acquires a shared (read) lock on the field accessor.
+	// Multiple readers can hold the lock simultaneously.
 	RLock()
+
+	// RUnlock releases the shared (read) lock on the field accessor.
 	RUnlock()
+
+	// TryLock attempts to acquire an exclusive lock within the specified timeout.
+	// Returns true if the lock was acquired, false if the timeout was reached.
 	TryLock(timeout time.Duration) bool
 
-	// Event methods
+	// Event subscription methods
 
+	// Subscribe registers a callback function that will be called whenever the value changes.
+	// Returns an unsubscribe function that can be called to remove the subscription.
 	Subscribe(onUpdate func(newValue T)) (unsubscribe func())
+
+	// SubscribeIf registers a conditional callback function that will be called only when
+	// the value changes and the filter function returns true.
+	// Returns an unsubscribe function that can be called to remove the subscription.
 	SubscribeIf(onUpdate func(newValue T), filter func(T) bool) (unsubscribe func())
+
+	// SubscribeCh returns a channel that receives value updates and an unsubscribe function.
+	// The channel is buffered to prevent blocking on slow consumers.
 	SubscribeCh() (ch <-chan T, unsubscribe func())
+
+	// SubscribeIfCh returns a channel that receives filtered value updates and an unsubscribe function.
+	// Only values that pass the filter function (if provided) are sent to the channel.
 	SubscribeIfCh(filter func(T) bool) (ch <-chan T, unsubscribe func())
 
-	// Atomic methods
+	// Atomic operation methods
 
+	// CompareAndSwap atomically compares the current value with expected and,
+	// if they are equal, swaps the current value with new.
+	// Returns true if the swap was performed.
 	CompareAndSwap(expected T, new T) bool
+
+	// Swap atomically stores new as the new value and returns the previous value.
 	Swap(new T) T
+
+	// Transaction performs an atomic update using the provided update function.
+	// The update function receives the current value and should return the new value.
+	// The operation is retried until it succeeds or a maximum number of attempts is reached.
 	Transaction(update func(current T) T) (final T)
 
 	// Version control methods
 
+	// Version returns the current version number of the field.
+	// The version is incremented each time the value changes.
 	Version() uint64
+
+	// ChangedSince returns true if the field has been modified since the specified version.
 	ChangedSince(version uint64) bool
 
 	// Merging methods
 
+	// Merge combines the current value with another field accessor's value using the provided merge function.
+	// The operation is performed atomically using compare-and-swap.
 	Merge(other FieldAccessor[T], mergeFn func(current, other T) T)
 
-	// History methods
+	// History tracking methods
 
+	// History returns the last 'limit' values stored in the field accessor.
+	// The values are returned in chronological order (oldest first).
 	History(limit uint16) []T
+
+	// Delta returns all values that have been set since the specified version.
+	// Returns an error if the requested version is too old and no longer in history.
 	Delta(fromVersion uint64) ([]T, error)
 
 	// Context support methods
 
+	// GetWithContext returns the current value with context support.
+	// The context can be used for cancellation or timeout.
 	GetWithContext(ctx context.Context) (T, error)
+
+	// SetWithContext sets a new value with context support.
+	// The context can be used for cancellation or timeout.
 	SetWithContext(ctx context.Context, value T) error
 
 	// Serialization methods
 
+	// Serializable interface provides JSON serialization capabilities
 	encoding.Serializable[T]
 
+	// Clone creates a new field accessor with the same current value.
+	// The clone does not share subscribers or history with the original.
 	Clone() FieldAccessor[T]
 }
 
-// NFA is alias for NumberFieldAccessor[T] where T is a specific type.
+// NFA is a type alias for NumberFieldAccessor[T] providing a shorter name
+// for numeric field accessor types.
 type NFA[T any] NumberFieldAccessor[T]
 
-// NumberFieldAccessor provides basic methods for accessing and modifying a numeric field.
+// NumberFieldAccessor extends FieldAccessor with mathematical operations
+// for numeric types. It provides thread-safe arithmetic operations that
+// automatically handle value updates and subscriber notifications.
 type NumberFieldAccessor[T any] interface {
 	FieldAccessor[T]
 
-	// Mathematical methods
+	// Mathematical operation methods
 
+	// Add atomically adds the given value to the current field value.
+	// The operation is thread-safe and notifies subscribers of the change.
 	Add(value T)
+
+	// Sub atomically subtracts the given value from the current field value.
+	// The operation is thread-safe and notifies subscribers of the change.
 	Sub(value T)
 
+	// Mul atomically multiplies the current field value by the given value.
+	// The operation is thread-safe and notifies subscribers of the change.
 	Mul(value T)
+
+	// Div atomically divides the current field value by the given value.
+	// The operation is thread-safe and notifies subscribers of the change.
+	// Note: Division by zero behavior depends on the underlying numeric type.
 	Div(value T)
 
+	// Mod atomically computes the modulo of the current field value with the given value.
+	// The operation is thread-safe and notifies subscribers of the change.
 	Mod(value T)
+
+	// Pow atomically raises the current field value to the power of the given value.
+	// The operation is thread-safe and notifies subscribers of the change.
 	Pow(value T)
 }
 
-// ArrayFA is alias for ArrayFieldAccessor[T] where T is a specific type.
+// ArrayFA is a type alias for ArrayFieldAccessor[T] providing a shorter name
+// for array field accessor types.
 type ArrayFA[T any] ArrayFieldAccessor[T]
 
-// ArrayFieldAccessor provides basic methods for accessing and modifying an array field.
+// ArrayFieldAccessor extends FieldAccessor with array-specific operations.
+// It provides thread-safe array manipulation methods that automatically
+// handle value updates and subscriber notifications.
 type ArrayFieldAccessor[T any] interface {
 	FieldAccessor[T]
 
-	// Array methods
+	// Array manipulation methods
 
+	// Index returns the element at the specified index.
+	// Panics if the index is out of bounds.
 	Index(index int) T
+
+	// Append adds one or more elements to the end of the array.
+	// The operation is thread-safe and notifies subscribers of the change.
 	Append(values ...T)
+
+	// Remove removes the element at the specified index.
+	// The operation is thread-safe and notifies subscribers of the change.
+	// Panics if the index is out of bounds.
 	Remove(index int)
+
+	// Insert inserts a value at the specified index, shifting existing elements.
+	// The operation is thread-safe and notifies subscribers of the change.
+	// Panics if the index is out of bounds.
 	Insert(index int, value T)
+
+	// Len returns the current length of the array.
+	// This operation is thread-safe.
 	Len() int
+
+	// Clear removes all elements from the array.
+	// The operation is thread-safe and notifies subscribers of the change.
 	Clear()
+
+	// Resize changes the array size to the specified length.
+	// If the new size is larger, zero values are appended.
+	// If smaller, elements are truncated.
+	// The operation is thread-safe and notifies subscribers of the change.
 	Resize(newLen int)
+
+	// CopyTo copies array elements to the provided destination slice.
+	// Returns the number of elements copied.
+	// This operation is thread-safe.
 	CopyTo(dest []T) int
+
+	// Reverse returns a new array with elements in reverse order.
+	// The original array is not modified.
+	// This operation is thread-safe.
 	Reverse() []T
+
+	// Iter returns an iterator for traversing array elements.
+	// The iterator provides thread-safe access to array elements.
 	Iter() sequence.Iterator[T]
 }
 
-// ComFA is alias for ComparableFieldAccessor[T] where T is a specific type.
+// ComFA is a type alias for ComparableFieldAccessor[T] providing a shorter name
+// for comparable field accessor types.
 type ComFA[T any] ComparableFieldAccessor[T]
 
-// ComparableFieldAccessor provides basic methods for comparing two field values the same type.
+// ComparableFieldAccessor extends FieldAccessor with comparison operations
+// for types that support ordering. It provides thread-safe comparison methods
+// that can be used for conditional operations and sorting.
 type ComparableFieldAccessor[T any] interface {
 	FieldAccessor[T]
 
 	// Comparison methods
 
+	// Equal returns true if this field's value equals the other field's value.
+	// The comparison is performed atomically and is thread-safe.
 	Equal(other ComparableFieldAccessor[T]) bool
+
+	// Less returns true if this field's value is less than the other field's value.
+	// The comparison is performed atomically and is thread-safe.
 	Less(other ComparableFieldAccessor[T]) bool
+
+	// Greater returns true if this field's value is greater than the other field's value.
+	// The comparison is performed atomically and is thread-safe.
 	Greater(other ComparableFieldAccessor[T]) bool
+
+	// LessOrEqual returns true if this field's value is less than or equal to the other field's value.
+	// The comparison is performed atomically and is thread-safe.
 	LessOrEqual(other ComparableFieldAccessor[T]) bool
+
+	// GreaterOrEqual returns true if this field's value is greater than or equal to the other field's value.
+	// The comparison is performed atomically and is thread-safe.
 	GreaterOrEqual(other ComparableFieldAccessor[T]) bool
 }
 
-// CovFA is alias for ConvertibleFieldAccessor[T] where T is a specific type.
+// CovFA is a type alias for ConvertibleFieldAccessor[T] providing a shorter name
+// for convertible field accessor types.
 type CovFA[T any] ConvertibleFieldAccessor[T]
 
-// ConvertibleFieldAccessor provides basic methods for converting a field value to a different type.
+// ConvertibleFieldAccessor extends FieldAccessor with type conversion capabilities.
+// It provides thread-safe methods for converting field values to different types
+// using Go's type system information.
 type ConvertibleFieldAccessor[T any] interface {
 	FieldAccessor[T]
 
-	// Conversion methods
+	// Type conversion methods
 
+	// ToType converts the current field value to the specified Go type.
+	// Returns the converted value and an error if the conversion is not possible.
+	// The conversion is performed atomically and is thread-safe.
 	ToType(t types.Type) (any, error)
 }

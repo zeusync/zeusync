@@ -2,13 +2,14 @@ package vars
 
 import (
 	"fmt"
-	"github.com/cespare/xxhash/v2"
-	"github.com/zeusync/zeusync/internal/core/syncv2"
-	"github.com/zeusync/zeusync/pkg/sequence"
 	"math/rand"
 	"sort"
 	sc "sync"
 	"sync/atomic"
+
+	"github.com/cespare/xxhash/v2"
+	"github.com/zeusync/zeusync/internal/core/syncv2"
+	"github.com/zeusync/zeusync/pkg/sequence"
 )
 
 const defaultShardKey = "default"

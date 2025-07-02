@@ -1,10 +1,11 @@
 package vars
 
 import (
-	sync "github.com/zeusync/zeusync/internal/core/syncv2"
 	"math/rand"
 	"testing"
 	"unsafe"
+
+	sync "github.com/zeusync/zeusync/internal/core/syncv2"
 )
 
 type atomicOperationType int

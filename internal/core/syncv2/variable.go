@@ -1,8 +1,9 @@
 package sync
 
 import (
-	"github.com/zeusync/zeusync/pkg/encoding"
 	"time"
+
+	"github.com/zeusync/zeusync/pkg/encoding"
 
 	"github.com/zeusync/zeusync/internal/core/syncv2/metrics"
 	"github.com/zeusync/zeusync/internal/core/syncv2/types"

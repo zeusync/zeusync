@@ -2,8 +2,9 @@ package vars
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestSharded_HashSharded(t *testing.T) {

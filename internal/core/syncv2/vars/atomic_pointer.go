@@ -1,10 +1,11 @@
 package vars
 
 import (
-	sync "github.com/zeusync/zeusync/internal/core/syncv2"
-	"github.com/zeusync/zeusync/pkg/sequence"
 	"sync/atomic"
 	"unsafe"
+
+	sync "github.com/zeusync/zeusync/internal/core/syncv2"
+	"github.com/zeusync/zeusync/pkg/sequence"
 )
 
 var _ sync.AtomicRoot[unsafe.Pointer] = (*AtomicPointer)(nil)
