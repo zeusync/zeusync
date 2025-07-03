@@ -2,17 +2,18 @@ package protocol
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
+	"github.com/zeusync/zeusync/internal/core/observability/log"
+	"github.com/zeusync/zeusync/internal/core/protocol/quic"
+	"github.com/zeusync/zeusync/internal/core/protocol/websocket"
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWebSocketProtocol_Lifecycle(t *testing.T) {
-	config := intrefaces.ProtocolConfig{
+	config := Config{
 		Host:           "127.0.0.1",
 		Port:           8080,
 		MaxConnections: 100,
@@ -23,10 +24,9 @@ func TestWebSocketProtocol_Lifecycle(t *testing.T) {
 		QueueSize:      1000,
 	}
 
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
+	logger := log.New(log.LevelDebug)
 
-	protocol := NewWebSocketProtocol(config, logger)
+	protocol := websocket.NewWebSocketProtocol(config, logger)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -39,7 +39,7 @@ func TestWebSocketProtocol_Lifecycle(t *testing.T) {
 	// Test protocol properties
 	assert.Equal(t, "WebSocket", protocol.Name())
 	assert.Equal(t, "1.0.0", protocol.Version())
-	assert.Equal(t, intrefaces.ProtocolWebSocket, protocol.Type())
+	assert.Equal(t, WebSocket, protocol.Type())
 
 	// Test Stop
 	err = protocol.Stop(ctx)
@@ -48,7 +48,7 @@ func TestWebSocketProtocol_Lifecycle(t *testing.T) {
 }
 
 func TestWebSocketProtocol_MessageHandlers(t *testing.T) {
-	config := intrefaces.ProtocolConfig{
+	config := Config{
 		Host:        "127.0.0.1",
 		Port:        8081,
 		BufferSize:  4096,
@@ -56,14 +56,13 @@ func TestWebSocketProtocol_MessageHandlers(t *testing.T) {
 		QueueSize:   1000,
 	}
 
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
+	logger := log.New(log.LevelDebug)
 
-	protocol := NewWebSocketProtocol(config, logger)
+	protocol := websocket.NewWebSocketProtocol(config, logger)
 
 	// Test handler registration
 	handlerCalled := false
-	testHandler := func(ctx context.Context, client intrefaces.ClientInfo, message intrefaces.Message) error {
+	testHandler := func(ctx context.Context, client ClientInfo, message IMessage) error {
 		handlerCalled = true
 		return nil
 	}
@@ -93,7 +92,7 @@ func TestWebSocketProtocol_MessageHandlers(t *testing.T) {
 }
 
 func TestWebSocketProtocol_Groups(t *testing.T) {
-	config := intrefaces.ProtocolConfig{
+	config := Config{
 		Host:        "127.0.0.1",
 		Port:        8082,
 		BufferSize:  4096,
@@ -101,10 +100,9 @@ func TestWebSocketProtocol_Groups(t *testing.T) {
 		QueueSize:   1000,
 	}
 
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
+	logger := log.New(log.LevelDebug)
 
-	protocol := NewWebSocketProtocol(config, logger)
+	protocol := websocket.NewWebSocketProtocol(config, logger)
 
 	// Test group creation
 	err := protocol.CreateGroup("test-group")
@@ -129,7 +127,7 @@ func TestWebSocketProtocol_Groups(t *testing.T) {
 }
 
 func TestQuicProtocol_Lifecycle(t *testing.T) {
-	config := intrefaces.ProtocolConfig{
+	config := Config{
 		Host:           "127.0.0.1",
 		Port:           9090,
 		MaxConnections: 100,
@@ -141,10 +139,9 @@ func TestQuicProtocol_Lifecycle(t *testing.T) {
 		TLSEnabled:     false, // Use self-signed cert for testing
 	}
 
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
+	logger := log.New(log.LevelDebug)
 
-	protocol := NewQuicProtocol(config, logger)
+	protocol := quic.NewQuicProtocol(config, logger)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -157,7 +154,7 @@ func TestQuicProtocol_Lifecycle(t *testing.T) {
 	// Test protocol properties
 	assert.Equal(t, "QUIC", protocol.Name())
 	assert.Equal(t, "1.0.0", protocol.Version())
-	assert.Equal(t, intrefaces.ProtocolCustom, protocol.Type())
+	assert.Equal(t, Custom, protocol.Type())
 
 	// Test Stop
 	err = protocol.Stop(ctx)
@@ -166,7 +163,7 @@ func TestQuicProtocol_Lifecycle(t *testing.T) {
 }
 
 func TestQuicProtocol_MessageHandlers(t *testing.T) {
-	config := intrefaces.ProtocolConfig{
+	config := Config{
 		Host:        "127.0.0.1",
 		Port:        9091,
 		BufferSize:  4096,
@@ -175,14 +172,13 @@ func TestQuicProtocol_MessageHandlers(t *testing.T) {
 		TLSEnabled:  false,
 	}
 
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
+	logger := log.New(log.LevelDebug)
 
-	protocol := NewQuicProtocol(config, logger)
+	protocol := quic.NewQuicProtocol(config, logger)
 
 	// Test handler registration
 	handlerCalled := false
-	testHandler := func(ctx context.Context, client intrefaces.ClientInfo, message intrefaces.Message) error {
+	testHandler := func(ctx context.Context, client ClientInfo, message IMessage) error {
 		handlerCalled = true
 		return nil
 	}
@@ -234,7 +230,7 @@ func TestMessage_Operations(t *testing.T) {
 	require.NoError(t, err, "should marshal without error")
 	assert.NotEmpty(t, data, "marshaled data should not be empty")
 
-	// Test unmarshaling
+	// Test unmarshalling
 	newMessage := NewMessage("", nil)
 	err = newMessage.Unmarshal(data)
 	require.NoError(t, err, "should unmarshal without error")
@@ -259,11 +255,11 @@ func TestMessage_Operations(t *testing.T) {
 	require.NoError(t, err, "should decompress without error")
 
 	// Test priority and QoS
-	message.SetPriority(intrefaces.PriorityHigh)
-	assert.Equal(t, intrefaces.PriorityHigh, message.Priority())
+	message.SetPriority(PriorityHigh)
+	assert.Equal(t, PriorityHigh, message.Priority())
 
-	message.SetQoS(intrefaces.QoSExactlyOnce)
-	assert.Equal(t, intrefaces.QoSExactlyOnce, message.QoS())
+	message.SetQoS(QoSExactlyOnce)
+	assert.Equal(t, QoSExactlyOnce, message.QoS())
 }
 
 func TestMessage_Validation(t *testing.T) {

@@ -3,7 +3,7 @@ package middlewares
 import (
 	"context"
 	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 	"time"
 )
 
@@ -23,7 +23,7 @@ func (m *LoggingMiddleware) Priority() uint16 {
 }
 
 // BeforeHandle logs before message handling
-func (m *LoggingMiddleware) BeforeHandle(_ context.Context, client intrefaces.ClientInfo, message intrefaces.Message) error {
+func (m *LoggingMiddleware) BeforeHandle(_ context.Context, client protocol.ClientInfo, message *protocol.Message) error {
 	m.logger.Debug("Processing message",
 		log.String("client_id", client.ID),
 		log.String("message_type", message.Type()),
@@ -34,7 +34,7 @@ func (m *LoggingMiddleware) BeforeHandle(_ context.Context, client intrefaces.Cl
 }
 
 // AfterHandle logs after message handling
-func (m *LoggingMiddleware) AfterHandle(_ context.Context, client intrefaces.ClientInfo, message intrefaces.Message, response intrefaces.Message, err error) error {
+func (m *LoggingMiddleware) AfterHandle(_ context.Context, client protocol.ClientInfo, message *protocol.Message, _ *protocol.Message, err error) error {
 	fields := []log.Field{
 		log.String("client_id", client.ID),
 		log.String("message_type", message.Type()),
@@ -42,15 +42,15 @@ func (m *LoggingMiddleware) AfterHandle(_ context.Context, client intrefaces.Cli
 		log.String("remote_addr", client.RemoteAddress),
 	}
 	if err != nil {
-		m.logger.Error("Message handling failed", fields...)
+		m.logger.Error("IMessage handling failed", fields...)
 	} else {
-		m.logger.Debug("Message handled successfully", fields...)
+		m.logger.Debug("IMessage handled successfully", fields...)
 	}
 	return nil
 }
 
 // OnConnect logs client connections
-func (m *LoggingMiddleware) OnConnect(_ context.Context, client intrefaces.ClientInfo) error {
+func (m *LoggingMiddleware) OnConnect(_ context.Context, client protocol.ClientInfo) error {
 	m.logger.Debug("Client connected",
 		log.String("client_id", client.ID),
 		log.String("remote_addr", client.RemoteAddress),
@@ -60,7 +60,7 @@ func (m *LoggingMiddleware) OnConnect(_ context.Context, client intrefaces.Clien
 }
 
 // OnDisconnect logs client disconnections
-func (m *LoggingMiddleware) OnDisconnect(_ context.Context, client intrefaces.ClientInfo, reason string) error {
+func (m *LoggingMiddleware) OnDisconnect(_ context.Context, client protocol.ClientInfo, reason string) error {
 	m.logger.Debug("Client disconnected",
 		log.String("client_id", client.ID),
 		log.String("remote_addr", client.RemoteAddress),

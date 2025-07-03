@@ -246,7 +246,15 @@ func Uintptr(key string, val uintptr) Field {
 	}
 }
 
-func Error(key string, val error) Field {
+func Error(val error) Field {
+	return Field{
+		Key:   "error",
+		Type:  ErrorType,
+		Value: val,
+	}
+}
+
+func ErrorWithKey(key string, val error) Field {
 	return Field{
 		Key:   key,
 		Type:  ErrorType,

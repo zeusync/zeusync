@@ -3,7 +3,7 @@ package middlewares
 import (
 	"context"
 	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 	"sync"
 	"time"
 )
@@ -33,7 +33,7 @@ func (m *RateLimitMiddleware) Priority() uint16 {
 }
 
 // BeforeHandle checks rate limits before message handling
-func (m *RateLimitMiddleware) BeforeHandle(_ context.Context, client intrefaces.ClientInfo, message intrefaces.Message) error {
+func (m *RateLimitMiddleware) BeforeHandle(_ context.Context, client protocol.ClientInfo, message *protocol.Message) error {
 	// Skip rate limiting for certain message types
 	if message.Type() == "ping" || message.Type() == "heartbeat" {
 		return nil
@@ -67,12 +67,12 @@ func (m *RateLimitMiddleware) BeforeHandle(_ context.Context, client intrefaces.
 }
 
 // AfterHandle is called after message handling
-func (m *RateLimitMiddleware) AfterHandle(_ context.Context, _ intrefaces.ClientInfo, _ intrefaces.Message, response intrefaces.Message, err error) error {
+func (m *RateLimitMiddleware) AfterHandle(_ context.Context, _ protocol.ClientInfo, _ *protocol.Message, response *protocol.Message, err error) error {
 	return nil
 }
 
 // OnConnect handles client connection
-func (m *RateLimitMiddleware) OnConnect(_ context.Context, client intrefaces.ClientInfo) error {
+func (m *RateLimitMiddleware) OnConnect(_ context.Context, client protocol.ClientInfo) error {
 	// Initialize rate limit for new client
 	m.clients.Store(client.ID, &clientRateLimit{
 		count:  0,
@@ -82,7 +82,7 @@ func (m *RateLimitMiddleware) OnConnect(_ context.Context, client intrefaces.Cli
 }
 
 // OnDisconnect handles client disconnection
-func (m *RateLimitMiddleware) OnDisconnect(_ context.Context, client intrefaces.ClientInfo, _ string) error {
+func (m *RateLimitMiddleware) OnDisconnect(_ context.Context, client protocol.ClientInfo, _ string) error {
 	// Clean up rate limit data
 	m.clients.Delete(client.ID)
 	return nil

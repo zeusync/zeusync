@@ -1,12 +1,12 @@
-package intrefaces
+package protocol
 
 import (
 	"context"
 	"time"
 )
 
-// Message represents a protocol message
-type Message interface {
+// IMessage represents a protocol message
+type IMessage interface {
 	// Content
 
 	Type() string
@@ -30,13 +30,13 @@ type Message interface {
 	SetRoute(string)
 	IsResponse() bool
 	ResponseTo() string
-	CreateResponse(payload any) Message
+	CreateResponse(payload any) IMessage
 
 	// Serialization
 
 	Marshal() ([]byte, error)
 	Unmarshal([]byte) error
-	Clone() Message
+	Clone() IMessage
 
 	// Len and limits
 
@@ -44,6 +44,7 @@ type Message interface {
 	MaxSize() int
 	Compress() error
 	Decompress() error
+	IsCompressed() bool
 
 	// Priority and QoS
 
@@ -54,7 +55,7 @@ type Message interface {
 }
 
 // MessageHandler processes incoming messages
-type MessageHandler func(ctx context.Context, client ClientInfo, message Message) error
+type MessageHandler func(ctx context.Context, client ClientInfo, message IMessage) error
 
 // MessagePriority defines message priority levels
 type MessagePriority uint8

@@ -127,7 +127,7 @@ func (m *OptimizedMessage) reset() {
 	m.unmarshalBuf = m.unmarshalBuf[:0]
 }
 
-// Global message pool instance
+// DefaultMessagePool global message pool instance
 var DefaultMessagePool = NewMessagePool()
 
 // NewPooledMessage creates a new message using the pool

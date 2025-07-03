@@ -3,7 +3,7 @@ package middlewares
 import (
 	"context"
 	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 )
 
 // AuthMiddleware handles authentication
@@ -23,7 +23,7 @@ func (m *AuthMiddleware) Priority() uint16 {
 }
 
 // BeforeHandle checks authentication before message handling
-func (m *AuthMiddleware) BeforeHandle(_ context.Context, client intrefaces.ClientInfo, message intrefaces.Message) error {
+func (m *AuthMiddleware) BeforeHandle(_ context.Context, client protocol.ClientInfo, message *protocol.Message) error {
 	// Skip auth for certain message types
 	if _, exists := m.skipMap[message.Type()]; exists {
 		return nil
@@ -46,12 +46,12 @@ func (m *AuthMiddleware) BeforeHandle(_ context.Context, client intrefaces.Clien
 }
 
 // AfterHandle is called after message handling
-func (m *AuthMiddleware) AfterHandle(_ context.Context, _ intrefaces.ClientInfo, _ intrefaces.Message, _ intrefaces.Message, _ error) error {
+func (m *AuthMiddleware) AfterHandle(_ context.Context, _ protocol.ClientInfo, _ *protocol.Message, _ *protocol.Message, _ error) error {
 	return nil
 }
 
 // OnConnect handles client connection authentication
-func (m *AuthMiddleware) OnConnect(_ context.Context, client intrefaces.ClientInfo) error {
+func (m *AuthMiddleware) OnConnect(_ context.Context, client protocol.ClientInfo) error {
 	// In a real implementation, you might check tokens, certificates, etc.
 	m.logger.Debug("Client authentication check",
 		log.String("client_id", client.ID),
@@ -61,6 +61,6 @@ func (m *AuthMiddleware) OnConnect(_ context.Context, client intrefaces.ClientIn
 }
 
 // OnDisconnect handles client disconnection
-func (m *AuthMiddleware) OnDisconnect(ctx context.Context, client intrefaces.ClientInfo, reason string) error {
+func (m *AuthMiddleware) OnDisconnect(_ context.Context, _ protocol.ClientInfo, _ string) error {
 	return nil
 }

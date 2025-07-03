@@ -3,7 +3,7 @@ package middlewares
 import (
 	"context"
 	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 	"sync"
 	"time"
 )
@@ -33,14 +33,14 @@ func (m *MetricsMiddleware) Priority() uint16 {
 }
 
 // BeforeHandle records start time
-func (m *MetricsMiddleware) BeforeHandle(ctx context.Context, _ intrefaces.ClientInfo, _ intrefaces.Message) error {
+func (m *MetricsMiddleware) BeforeHandle(ctx context.Context, _ protocol.ClientInfo, _ *protocol.Message) error {
 	// Store start time in context
 	ctx = context.WithValue(ctx, "start_time", time.Now())
 	return nil
 }
 
 // AfterHandle records metrics
-func (m *MetricsMiddleware) AfterHandle(ctx context.Context, _ intrefaces.ClientInfo, message intrefaces.Message, _ intrefaces.Message, err error) error {
+func (m *MetricsMiddleware) AfterHandle(ctx context.Context, _ protocol.ClientInfo, message *protocol.Message, _ *protocol.Message, err error) error {
 	startTime, ok := ctx.Value("start_time").(time.Time)
 	if !ok {
 		return nil
@@ -62,12 +62,12 @@ func (m *MetricsMiddleware) AfterHandle(ctx context.Context, _ intrefaces.Client
 }
 
 // OnConnect records connection metrics
-func (m *MetricsMiddleware) OnConnect(_ context.Context, _ intrefaces.ClientInfo) error {
+func (m *MetricsMiddleware) OnConnect(_ context.Context, _ protocol.ClientInfo) error {
 	return nil
 }
 
 // OnDisconnect records disconnection metrics
-func (m *MetricsMiddleware) OnDisconnect(_ context.Context, _ intrefaces.ClientInfo, _ string) error {
+func (m *MetricsMiddleware) OnDisconnect(_ context.Context, _ protocol.ClientInfo, _ string) error {
 	return nil
 }
 

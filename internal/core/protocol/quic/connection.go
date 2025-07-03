@@ -1,9 +1,9 @@
-package protocol
+package quic
 
 import (
 	"context"
 	"github.com/quic-go/quic-go"
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 	"io"
 	"net"
 	"sync"
@@ -14,13 +14,13 @@ import (
 	"github.com/pkg/errors"
 )
 
-var _ intrefaces.Connection = (*QuicConnection)(nil)
+var _ protocol.Connection = (*Connection)(nil)
 
-// QuicConnection represents a QUIC client connection
-type QuicConnection struct {
+// Connection represents a QUIC client connection
+type Connection struct {
 	id           string
 	session      *quic.Conn
-	config       intrefaces.ProtocolConfig
+	config       protocol.Config
 	mu           sync.RWMutex
 	metadata     map[string]interface{}
 	lastActivity int64 // Unix timestamp
@@ -30,7 +30,7 @@ type QuicConnection struct {
 	// Callbacks
 	onClose   func(string)
 	onError   func(error)
-	onMessage func(intrefaces.Message)
+	onMessage func(protocol.IMessage)
 
 	// Metrics
 	messagesSent     uint64
@@ -44,9 +44,9 @@ type QuicConnection struct {
 }
 
 // NewQuicConnection creates a new QUIC connection
-func NewQuicConnection(session *quic.Conn, config intrefaces.ProtocolConfig) *QuicConnection {
+func NewQuicConnection(session *quic.Conn, config protocol.Config) *Connection {
 	now := time.Now()
-	return &QuicConnection{
+	return &Connection{
 		id:           uuid.New().String(),
 		session:      session,
 		config:       config,
@@ -57,22 +57,22 @@ func NewQuicConnection(session *quic.Conn, config intrefaces.ProtocolConfig) *Qu
 }
 
 // ID returns the connection ID
-func (c *QuicConnection) ID() string {
+func (c *Connection) ID() string {
 	return c.id
 }
 
 // RemoteAddr returns the remote network address
-func (c *QuicConnection) RemoteAddr() net.Addr {
+func (c *Connection) RemoteAddr() net.Addr {
 	return c.session.RemoteAddr()
 }
 
 // LocalAddr returns the local network address
-func (c *QuicConnection) LocalAddr() net.Addr {
+func (c *Connection) LocalAddr() net.Addr {
 	return c.session.LocalAddr()
 }
 
 // Send sends raw data over the connection
-func (c *QuicConnection) Send(data []byte) error {
+func (c *Connection) Send(data []byte) error {
 	if c.IsClosed() {
 		return errors.New("connection is closed")
 	}
@@ -100,7 +100,7 @@ func (c *QuicConnection) Send(data []byte) error {
 }
 
 // Receive receives raw data from the connection
-func (c *QuicConnection) Receive() ([]byte, error) {
+func (c *Connection) Receive() ([]byte, error) {
 	if c.IsClosed() {
 		return nil, errors.New("connection is closed")
 	}
@@ -132,7 +132,7 @@ func (c *QuicConnection) Receive() ([]byte, error) {
 }
 
 // SendMessage sends a message over the connection
-func (c *QuicConnection) SendMessage(message intrefaces.Message) error {
+func (c *Connection) SendMessage(message protocol.IMessage) error {
 	if c.IsClosed() {
 		return errors.New("connection is closed")
 	}
@@ -178,12 +178,12 @@ func (c *QuicConnection) SendMessage(message intrefaces.Message) error {
 	lengthBytes[2] = byte(len(data) >> 8)
 	lengthBytes[3] = byte(len(data))
 
-	if _, err := stream.Write(lengthBytes); err != nil {
+	if _, err = stream.Write(lengthBytes); err != nil {
 		return errors.Wrap(err, "failed to write message length")
 	}
 
 	// Write message data
-	if _, err := stream.Write(data); err != nil {
+	if _, err = stream.Write(data); err != nil {
 		return errors.Wrap(err, "failed to write message data")
 	}
 
@@ -196,7 +196,7 @@ func (c *QuicConnection) SendMessage(message intrefaces.Message) error {
 }
 
 // ReceiveMessage receives a message from the connection
-func (c *QuicConnection) ReceiveMessage() (intrefaces.Message, error) {
+func (c *Connection) ReceiveMessage() (protocol.IMessage, error) {
 	if c.IsClosed() {
 		return nil, errors.New("connection is closed")
 	}
@@ -226,18 +226,18 @@ func (c *QuicConnection) ReceiveMessage() (intrefaces.Message, error) {
 
 	// Read message data
 	data := make([]byte, messageLength)
-	if _, err := io.ReadFull(stream, data); err != nil {
+	if _, err = io.ReadFull(stream, data); err != nil {
 		return nil, errors.Wrap(err, "failed to read message data")
 	}
 
 	// Create and unmarshal message
-	message := NewMessage("", nil)
+	message := protocol.NewMessage("", nil)
 	if err = message.Unmarshal(data); err != nil {
 		return nil, errors.Wrap(err, "failed to unmarshal message")
 	}
 
 	// Decompress if needed
-	if message.compressed {
+	if message.IsCompressed() {
 		if err = message.Decompress(); err != nil {
 			return nil, errors.Wrap(err, "failed to decompress message")
 		}
@@ -257,7 +257,7 @@ func (c *QuicConnection) ReceiveMessage() (intrefaces.Message, error) {
 }
 
 // getOrCreateStream gets or creates a stream for sending data
-func (c *QuicConnection) getOrCreateStream() (*quic.Stream, error) {
+func (c *Connection) getOrCreateStream() (*quic.Stream, error) {
 	c.streamMu.Lock()
 	defer c.streamMu.Unlock()
 
@@ -273,7 +273,7 @@ func (c *QuicConnection) getOrCreateStream() (*quic.Stream, error) {
 }
 
 // acceptStream accepts an incoming stream
-func (c *QuicConnection) acceptStream() (*quic.Stream, error) {
+func (c *Connection) acceptStream() (*quic.Stream, error) {
 	stream, err := c.session.AcceptStream(context.Background())
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to accept stream")
@@ -282,7 +282,7 @@ func (c *QuicConnection) acceptStream() (*quic.Stream, error) {
 }
 
 // IsAlive checks if the connection is still active
-func (c *QuicConnection) IsAlive() bool {
+func (c *Connection) IsAlive() bool {
 	if atomic.LoadInt32(&c.closed) == 1 {
 		return false
 	}
@@ -297,23 +297,23 @@ func (c *QuicConnection) IsAlive() bool {
 }
 
 // IsClosed checks if the connection is closed
-func (c *QuicConnection) IsClosed() bool {
+func (c *Connection) IsClosed() bool {
 	return atomic.LoadInt32(&c.closed) == 1
 }
 
 // LastActivity returns the time of the last activity
-func (c *QuicConnection) LastActivity() time.Time {
+func (c *Connection) LastActivity() time.Time {
 	timestamp := atomic.LoadInt64(&c.lastActivity)
 	return time.Unix(timestamp, 0)
 }
 
 // Close closes the connection
-func (c *QuicConnection) Close() error {
+func (c *Connection) Close() error {
 	return c.CloseWithReason("connection closed")
 }
 
 // CloseWithReason closes the connection with a specific reason
-func (c *QuicConnection) CloseWithReason(reason string) error {
+func (c *Connection) CloseWithReason(reason string) error {
 	if !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
 		return nil // Already closed
 	}
@@ -338,7 +338,7 @@ func (c *QuicConnection) CloseWithReason(reason string) error {
 }
 
 // SetTimeout sets the connection timeout
-func (c *QuicConnection) SetTimeout(timeout time.Duration) error {
+func (c *Connection) SetTimeout(timeout time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.config.ReadTimeout = timeout
@@ -347,14 +347,14 @@ func (c *QuicConnection) SetTimeout(timeout time.Duration) error {
 }
 
 // SetKeepAlive sets the keep-alive for the connection
-func (c *QuicConnection) SetKeepAlive(keepAlive bool) error {
+func (c *Connection) SetKeepAlive(keepAlive bool) error {
 	// QUIC has built-in keep-alive mechanisms
 	// This could be used to configure idle timeout
 	return nil
 }
 
 // SetBufferSize sets the buffer size for the connection
-func (c *QuicConnection) SetBufferSize(size int) error {
+func (c *Connection) SetBufferSize(size int) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.config.BufferSize = uint32(size)
@@ -362,7 +362,7 @@ func (c *QuicConnection) SetBufferSize(size int) error {
 }
 
 // Metadata returns a copy of the connection metadata
-func (c *QuicConnection) Metadata() map[string]interface{} {
+func (c *Connection) Metadata() map[string]interface{} {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -374,14 +374,14 @@ func (c *QuicConnection) Metadata() map[string]interface{} {
 }
 
 // SetMetadata sets a metadata key-value pair
-func (c *QuicConnection) SetMetadata(key string, value interface{}) {
+func (c *Connection) SetMetadata(key string, value interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.metadata[key] = value
 }
 
 // GetMetadata gets a metadata value by key
-func (c *QuicConnection) GetMetadata(key string) (interface{}, bool) {
+func (c *Connection) GetMetadata(key string) (interface{}, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	value, exists := c.metadata[key]
@@ -389,28 +389,28 @@ func (c *QuicConnection) GetMetadata(key string) (interface{}, bool) {
 }
 
 // OnClose sets a callback for when the connection is closed
-func (c *QuicConnection) OnClose(callback func(string)) {
+func (c *Connection) OnClose(callback func(string)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onClose = callback
 }
 
 // OnError sets a callback for connection errors
-func (c *QuicConnection) OnError(callback func(error)) {
+func (c *Connection) OnError(callback func(error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onError = callback
 }
 
 // OnMessage sets a callback for received messages
-func (c *QuicConnection) OnMessage(callback func(intrefaces.Message)) {
+func (c *Connection) OnMessage(callback func(protocol.IMessage)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onMessage = callback
 }
 
 // ClientInfo returns client information
-func (c *QuicConnection) ClientInfo() intrefaces.ClientInfo {
+func (c *Connection) ClientInfo() protocol.ClientInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -435,7 +435,7 @@ func (c *QuicConnection) ClientInfo() intrefaces.ClientInfo {
 		}
 	}
 
-	return intrefaces.ClientInfo{
+	return protocol.ClientInfo{
 		ID:              c.id,
 		RemoteAddress:   c.RemoteAddr().String(),
 		ConnectedAt:     c.connectedAt,
@@ -451,8 +451,8 @@ func (c *QuicConnection) ClientInfo() intrefaces.ClientInfo {
 }
 
 // GetMetrics returns connection metrics
-func (c *QuicConnection) GetMetrics() intrefaces.ClientMetrics {
-	return intrefaces.ClientMetrics{
+func (c *Connection) GetMetrics() protocol.ClientMetrics {
+	return protocol.ClientMetrics{
 		ActiveConnections:    1, // This connection
 		TotalConnections:     1,
 		FailedConnections:    0,
@@ -465,7 +465,7 @@ func (c *QuicConnection) GetMetrics() intrefaces.ClientMetrics {
 }
 
 // calculateAverageMessageSize calculates the average message size
-func (c *QuicConnection) calculateAverageMessageSize() float64 {
+func (c *Connection) calculateAverageMessageSize() float64 {
 	totalMessages := atomic.LoadUint64(&c.messagesSent) + atomic.LoadUint64(&c.messagesReceived)
 	if totalMessages == 0 {
 		return 0

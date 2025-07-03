@@ -1,4 +1,4 @@
-package intrefaces
+package protocol
 
 import (
 	"net"

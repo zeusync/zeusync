@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
 )
 
 // OptimizedMessage represents an optimized protocol message with faster serialization
@@ -28,8 +27,8 @@ type OptimizedMessage struct {
 	route       string
 	isResponse  bool
 	responseTo  string
-	priority    intrefaces.MessagePriority
-	qos         intrefaces.QualityOfService
+	priority    MessagePriority
+	qos         QualityOfService
 
 	// Compression state
 	compressed bool
@@ -311,8 +310,8 @@ func (m *OptimizedMessage) Unmarshal(data []byte) error {
 	}
 	m.isResponse = (flags & 1) != 0
 	m.compressed = (flags & 2) != 0
-	m.priority = intrefaces.MessagePriority((flags >> 2) & 3)
-	m.qos = intrefaces.QualityOfService((flags >> 4) & 3)
+	m.priority = MessagePriority((flags >> 2) & 3)
+	m.qos = QualityOfService((flags >> 4) & 3)
 
 	// Read responseTo UUID
 	responseUUIDBytes := make([]byte, 16)
@@ -444,7 +443,7 @@ func (m *OptimizedMessage) ResponseTo() string {
 	return m.responseTo
 }
 
-func (m *OptimizedMessage) CreateResponse(payload interface{}) intrefaces.Message {
+func (m *OptimizedMessage) CreateResponse(payload interface{}) IMessage {
 	m.mu.RLock()
 	messageType := m.messageType
 	maxSize := m.maxSize
@@ -484,7 +483,7 @@ func (m *OptimizedMessage) CreateResponse(payload interface{}) intrefaces.Messag
 	return resp
 }
 
-func (m *OptimizedMessage) Clone() intrefaces.Message {
+func (m *OptimizedMessage) Clone() IMessage {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -550,27 +549,30 @@ func (m *OptimizedMessage) Decompress() error {
 	// TODO: Implement decompression for binary format
 	return nil
 }
+func (m *OptimizedMessage) IsCompressed() bool {
+	return m.compressed
+}
 
-func (m *OptimizedMessage) Priority() intrefaces.MessagePriority {
+func (m *OptimizedMessage) Priority() MessagePriority {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.priority
 }
 
-func (m *OptimizedMessage) SetPriority(priority intrefaces.MessagePriority) {
+func (m *OptimizedMessage) SetPriority(priority MessagePriority) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.priority = priority
 	m.data = nil
 }
 
-func (m *OptimizedMessage) QoS() intrefaces.QualityOfService {
+func (m *OptimizedMessage) QoS() QualityOfService {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.qos
 }
 
-func (m *OptimizedMessage) SetQoS(qos intrefaces.QualityOfService) {
+func (m *OptimizedMessage) SetQoS(qos QualityOfService) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.qos = qos

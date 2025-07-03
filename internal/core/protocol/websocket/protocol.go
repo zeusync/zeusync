@@ -1,9 +1,10 @@
-package protocol
+package websocket
 
 import (
 	"context"
 	"fmt"
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
+	"github.com/zeusync/zeusync/internal/core/observability/log"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 	"net"
 	"net/http"
 	"sort"
@@ -13,34 +14,33 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
-var _ intrefaces.Protocol = (*WebSocketProtocol)(nil)
+var _ protocol.Protocol = (*Protocol)(nil)
 
-// WebSocketProtocol implements the Protocol interface for WebSocket
-type WebSocketProtocol struct {
+// Protocol implements the Protocol interface for WebSocket
+type Protocol struct {
 	name    string
 	version string
-	config  intrefaces.ProtocolConfig
+	config  protocol.Config
 	server  *http.Server
 	running int32
 	mu      sync.RWMutex
 
-	// Message handling
-	handlers       map[string]intrefaces.MessageHandler
-	defaultHandler intrefaces.MessageHandler
-	middlewares    []intrefaces.ProtocolMiddleware
+	// IMessage handling
+	handlers       map[string]protocol.MessageHandler
+	defaultHandler protocol.MessageHandler
+	middlewares    []protocol.Middleware
 
 	// Client management
-	clients   map[string]*WebSocketConnection
+	clients   map[string]*Connection
 	clientsMu sync.RWMutex
 	groups    map[string]map[string]struct{}
 	groupsMu  sync.RWMutex
 
 	// Metrics
-	metrics *WebSocketMetrics
-	logger  *logrus.Entry
+	metrics *Metrics
+	logger  log.Log
 
 	// WebSocket upgrader
 	upgrader websocket.Upgrader
@@ -52,9 +52,9 @@ type WebSocketProtocol struct {
 	cancel         context.CancelFunc
 }
 
-// WebSocketMetrics extends the interface metrics with WebSocket-specific data
-type WebSocketMetrics struct {
-	intrefaces.ProtocolMetrics
+// Metrics extends the interface metrics with WebSocket-specific data
+type Metrics struct {
+	protocol.Metrics
 	mu                   sync.RWMutex
 	upgradeErrors        int64
 	pingsSent            int64
@@ -65,24 +65,24 @@ type WebSocketMetrics struct {
 
 // messageWork represents work for message processing workers
 type messageWork struct {
-	client  *WebSocketConnection
-	message intrefaces.Message
+	client  *Connection
+	message protocol.IMessage
 	ctx     context.Context
 }
 
 // NewWebSocketProtocol creates a new WebSocket protocol instance
-func NewWebSocketProtocol(config intrefaces.ProtocolConfig, logger *logrus.Logger) *WebSocketProtocol {
+func NewWebSocketProtocol(config protocol.Config, logger log.Log) *Protocol {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &WebSocketProtocol{
+	return &Protocol{
 		name:     "WebSocket",
 		version:  "1.0.0",
 		config:   config,
-		handlers: make(map[string]intrefaces.MessageHandler),
-		clients:  make(map[string]*WebSocketConnection),
+		handlers: make(map[string]protocol.MessageHandler),
+		clients:  make(map[string]*Connection),
 		groups:   make(map[string]map[string]struct{}),
-		metrics:  &WebSocketMetrics{},
-		logger:   logger.WithField("protocol", "websocket"),
+		metrics:  &Metrics{},
+		logger:   logger.With(log.String("protocol", "websocket")),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  int(config.BufferSize),
 			WriteBufferSize: int(config.BufferSize),
@@ -99,25 +99,25 @@ func NewWebSocketProtocol(config intrefaces.ProtocolConfig, logger *logrus.Logge
 }
 
 // Name returns the protocol name
-func (p *WebSocketProtocol) Name() string {
+func (p *Protocol) Name() string {
 	return p.name
 }
 
 // Version returns the protocol version
-func (p *WebSocketProtocol) Version() string {
+func (p *Protocol) Version() string {
 	return p.version
 }
 
 // Type returns the protocol type
-func (p *WebSocketProtocol) Type() intrefaces.ProtocolType {
+func (p *Protocol) Type() protocol.Type {
 	if p.config.TLSEnabled {
-		return intrefaces.ProtocolWebSocketSecure
+		return protocol.WebSocketSecure
 	}
-	return intrefaces.ProtocolWebSocket
+	return protocol.WebSocket
 }
 
 // Start starts the WebSocket protocol server
-func (p *WebSocketProtocol) Start(ctx context.Context, config intrefaces.ProtocolConfig) error {
+func (p *Protocol) Start(_ context.Context, config protocol.Config) error {
 	if !atomic.CompareAndSwapInt32(&p.running, 0, 1) {
 		return errors.New("protocol is already running")
 	}
@@ -154,19 +154,19 @@ func (p *WebSocketProtocol) Start(ctx context.Context, config intrefaces.Protoco
 		}
 
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			p.logger.WithError(err).Error("WebSocket server error")
+			p.logger.Error("WebSocket server error", log.Error(err))
 		}
 	}()
 
 	// Start metrics collection
 	go p.collectMetrics()
 
-	p.logger.Infof("WebSocket protocol started on %s", addr)
+	p.logger.Info("WebSocket protocol started on %s", log.String("address", addr))
 	return nil
 }
 
 // Stop stops the WebSocket protocol server
-func (p *WebSocketProtocol) Stop(ctx context.Context) error {
+func (p *Protocol) Stop(ctx context.Context) error {
 	if !atomic.CompareAndSwapInt32(&p.running, 1, 0) {
 		return errors.New("protocol is not running")
 	}
@@ -179,7 +179,7 @@ func (p *WebSocketProtocol) Stop(ctx context.Context) error {
 	for _, client := range p.clients {
 		_ = client.Close()
 	}
-	p.clients = make(map[string]*WebSocketConnection)
+	p.clients = make(map[string]*Connection)
 	p.clientsMu.Unlock()
 
 	// Stop HTTP server
@@ -197,7 +197,7 @@ func (p *WebSocketProtocol) Stop(ctx context.Context) error {
 }
 
 // Restart restarts the protocol
-func (p *WebSocketProtocol) Restart(ctx context.Context) error {
+func (p *Protocol) Restart(ctx context.Context) error {
 	if err := p.Stop(ctx); err != nil {
 		return err
 	}
@@ -205,12 +205,12 @@ func (p *WebSocketProtocol) Restart(ctx context.Context) error {
 }
 
 // IsRunning returns true if the protocol is running
-func (p *WebSocketProtocol) IsRunning() bool {
+func (p *Protocol) IsRunning() bool {
 	return atomic.LoadInt32(&p.running) == 1
 }
 
 // startWorkers starts the message processing worker pool
-func (p *WebSocketProtocol) startWorkers() {
+func (p *Protocol) startWorkers() {
 	workerCount := p.config.WorkerCount
 	if workerCount == 0 {
 		workerCount = 10 // Default worker count
@@ -223,7 +223,7 @@ func (p *WebSocketProtocol) startWorkers() {
 }
 
 // messageWorker processes messages from the work queue
-func (p *WebSocketProtocol) messageWorker() {
+func (p *Protocol) messageWorker() {
 	defer p.workerWg.Done()
 
 	for {
@@ -237,17 +237,17 @@ func (p *WebSocketProtocol) messageWorker() {
 }
 
 // processMessage processes a single message
-func (p *WebSocketProtocol) processMessage(work *messageWork) {
+func (p *Protocol) processMessage(work *messageWork) {
 	defer func() {
 		if r := recover(); r != nil {
-			p.logger.WithField("panic", r).Error("Message processing panic")
+			p.logger.Error("Message processing panic", log.Any("panic", r))
 		}
 	}()
 
 	// Apply middleware before handling
 	for _, mw := range p.middlewares {
 		if err := mw.BeforeHandle(work.ctx, work.client.ClientInfo(), work.message); err != nil {
-			p.logger.WithError(err).Error("Middleware BeforeHandle error")
+			p.logger.Error("Middleware BeforeHandle error", log.Error(err))
 			return
 		}
 	}
@@ -258,7 +258,7 @@ func (p *WebSocketProtocol) processMessage(work *messageWork) {
 		handler = p.defaultHandler
 	}
 
-	var response intrefaces.Message
+	var response = &protocol.Message{}
 	var err error
 
 	if handler != nil {
@@ -271,7 +271,7 @@ func (p *WebSocketProtocol) processMessage(work *messageWork) {
 	for i := len(p.middlewares) - 1; i >= 0; i-- {
 		mw := p.middlewares[i]
 		if mwErr := mw.AfterHandle(work.ctx, work.client.ClientInfo(), work.message, response, err); mwErr != nil {
-			p.logger.WithError(mwErr).Error("Middleware AfterHandle error")
+			p.logger.Error("Middleware AfterHandle error", log.Error(mwErr))
 		}
 	}
 
@@ -280,11 +280,11 @@ func (p *WebSocketProtocol) processMessage(work *messageWork) {
 }
 
 // handleWebSocket handles WebSocket upgrade requests
-func (p *WebSocketProtocol) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+func (p *Protocol) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Upgrade connection
 	conn, err := p.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		p.logger.WithError(err).Error("WebSocket upgrade failed")
+		p.logger.Error("WebSocket upgrade failed", log.Error(err))
 		atomic.AddInt64(&p.metrics.upgradeErrors, 1)
 		return
 	}
@@ -303,19 +303,19 @@ func (p *WebSocketProtocol) handleWebSocket(w http.ResponseWriter, r *http.Reque
 
 	// Apply connection middleware
 	for _, mw := range p.middlewares {
-		if err := mw.OnConnect(p.ctx, client.ClientInfo()); err != nil {
-			p.logger.WithError(err).Error("Middleware OnConnect error")
+		if err = mw.OnConnect(p.ctx, client.ClientInfo()); err != nil {
+			p.logger.Error("Middleware OnConnect error", log.Error(err))
 		}
 	}
 
-	p.logger.WithField("client_id", client.ID()).Info("Client connected")
+	p.logger.Info("Client connected", log.String("client_id", client.ID()))
 
 	// Handle client messages
 	go p.handleClient(client)
 }
 
 // handleClient handles messages from a specific client
-func (p *WebSocketProtocol) handleClient(client *WebSocketConnection) {
+func (p *Protocol) handleClient(client *Connection) {
 	defer func() {
 		// Remove from clients map
 		p.clientsMu.Lock()
@@ -335,7 +335,7 @@ func (p *WebSocketProtocol) handleClient(client *WebSocketConnection) {
 		// Apply disconnect middleware
 		for _, mw := range p.middlewares {
 			if err := mw.OnDisconnect(p.ctx, client.ClientInfo(), "connection closed"); err != nil {
-				p.logger.WithError(err).Error("Middleware OnDisconnect error")
+				p.logger.Error("Middleware OnDisconnect error", log.Error(err))
 			}
 		}
 
@@ -343,7 +343,7 @@ func (p *WebSocketProtocol) handleClient(client *WebSocketConnection) {
 		atomic.AddUint64(&p.metrics.ActiveConnections, ^uint64(0)) // Decrement
 
 		_ = client.Close()
-		p.logger.WithField("client_id", client.ID()).Info("Client disconnected")
+		p.logger.Info("Client disconnected", log.String("client_id", client.ID()))
 	}()
 
 	// Set up ping/pong handling
@@ -361,7 +361,7 @@ func (p *WebSocketProtocol) handleClient(client *WebSocketConnection) {
 			select {
 			case <-pingTicker.C:
 				if err := client.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
-					p.logger.WithError(err).Error("Failed to send ping")
+					p.logger.Error("Failed to send ping", log.Error(err))
 					return
 				}
 				atomic.AddInt64(&p.metrics.pingsSent, 1)
@@ -376,7 +376,7 @@ func (p *WebSocketProtocol) handleClient(client *WebSocketConnection) {
 		message, err := client.ReceiveMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				p.logger.WithError(err).Error("WebSocket error")
+				p.logger.Error("WebSocket error", log.Error(err))
 			}
 			return
 		}
@@ -391,20 +391,20 @@ func (p *WebSocketProtocol) handleClient(client *WebSocketConnection) {
 		default:
 			// Queue is full
 			atomic.AddInt64(&p.metrics.messageQueueOverflow, 1)
-			p.logger.Warn("Message queue overflow, dropping message")
+			p.logger.Warn("IMessage queue overflow, dropping message")
 		}
 	}
 }
 
 // handleHealth handles health check requests
-func (p *WebSocketProtocol) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (p *Protocol) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `{"status":"healthy","connections":%d}`, p.GetConnectionCount())
 }
 
 // handleMetrics handles metrics requests
-func (p *WebSocketProtocol) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+func (p *Protocol) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	metrics := p.GetMetrics()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -432,7 +432,7 @@ func (p *WebSocketProtocol) handleMetrics(w http.ResponseWriter, _ *http.Request
 }
 
 // collectMetrics periodically collects and updates metrics
-func (p *WebSocketProtocol) collectMetrics() {
+func (p *Protocol) collectMetrics() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -465,7 +465,7 @@ func (p *WebSocketProtocol) collectMetrics() {
 }
 
 // RegisterHandler registers a message handler for a specific message type
-func (p *WebSocketProtocol) RegisterHandler(messageType string, handler intrefaces.MessageHandler) error {
+func (p *Protocol) RegisterHandler(messageType string, handler protocol.MessageHandler) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -478,7 +478,7 @@ func (p *WebSocketProtocol) RegisterHandler(messageType string, handler intrefac
 }
 
 // UnregisterHandler unregisters a message handler
-func (p *WebSocketProtocol) UnregisterHandler(messageType string) error {
+func (p *Protocol) UnregisterHandler(messageType string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -491,7 +491,7 @@ func (p *WebSocketProtocol) UnregisterHandler(messageType string) error {
 }
 
 // GetHandler returns the handler for a specific message type
-func (p *WebSocketProtocol) GetHandler(messageType string) (intrefaces.MessageHandler, bool) {
+func (p *Protocol) GetHandler(messageType string) (protocol.MessageHandler, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -500,14 +500,14 @@ func (p *WebSocketProtocol) GetHandler(messageType string) (intrefaces.MessageHa
 }
 
 // SetDefaultHandler sets the default message handler
-func (p *WebSocketProtocol) SetDefaultHandler(handler intrefaces.MessageHandler) {
+func (p *Protocol) SetDefaultHandler(handler protocol.MessageHandler) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.defaultHandler = handler
 }
 
 // Send sends a message to a specific client
-func (p *WebSocketProtocol) Send(clientID string, message intrefaces.Message) error {
+func (p *Protocol) Send(clientID string, message protocol.IMessage) error {
 	p.clientsMu.RLock()
 	client, exists := p.clients[clientID]
 	p.clientsMu.RUnlock()
@@ -525,7 +525,7 @@ func (p *WebSocketProtocol) Send(clientID string, message intrefaces.Message) er
 }
 
 // SendToMultiple sends a message to multiple clients
-func (p *WebSocketProtocol) SendToMultiple(clientIDs []string, message intrefaces.Message) error {
+func (p *Protocol) SendToMultiple(clientIDs []string, message protocol.IMessage) error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(clientIDs))
 
@@ -556,7 +556,7 @@ func (p *WebSocketProtocol) SendToMultiple(clientIDs []string, message intreface
 }
 
 // Broadcast sends a message to all connected clients
-func (p *WebSocketProtocol) Broadcast(message intrefaces.Message) error {
+func (p *Protocol) Broadcast(message protocol.IMessage) error {
 	p.clientsMu.RLock()
 	clientIDs := make([]string, 0, len(p.clients))
 	for id := range p.clients {
@@ -568,7 +568,7 @@ func (p *WebSocketProtocol) Broadcast(message intrefaces.Message) error {
 }
 
 // BroadcastExcept sends a message to all clients except the specified ones
-func (p *WebSocketProtocol) BroadcastExcept(excludeClientIDs []string, message intrefaces.Message) error {
+func (p *Protocol) BroadcastExcept(excludeClientIDs []string, message protocol.IMessage) error {
 	excludeMap := make(map[string]struct{}, len(excludeClientIDs))
 	for _, id := range excludeClientIDs {
 		excludeMap[id] = struct{}{}
@@ -587,24 +587,24 @@ func (p *WebSocketProtocol) BroadcastExcept(excludeClientIDs []string, message i
 }
 
 // GetClient returns information about a specific client
-func (p *WebSocketProtocol) GetClient(clientID string) (intrefaces.ClientInfo, bool) {
+func (p *Protocol) GetClient(clientID string) (protocol.ClientInfo, bool) {
 	p.clientsMu.RLock()
 	client, exists := p.clients[clientID]
 	p.clientsMu.RUnlock()
 
 	if !exists {
-		return intrefaces.ClientInfo{}, false
+		return protocol.ClientInfo{}, false
 	}
 
 	return client.ClientInfo(), true
 }
 
 // GetAllClients returns a list of all connected clients
-func (p *WebSocketProtocol) GetAllClients() []intrefaces.ClientInfo {
+func (p *Protocol) GetAllClients() []protocol.ClientInfo {
 	p.clientsMu.RLock()
 	defer p.clientsMu.RUnlock()
 
-	clients := make([]intrefaces.ClientInfo, 0, len(p.clients))
+	clients := make([]protocol.ClientInfo, 0, len(p.clients))
 	for _, client := range p.clients {
 		clients = append(clients, client.ClientInfo())
 	}
@@ -613,7 +613,7 @@ func (p *WebSocketProtocol) GetAllClients() []intrefaces.ClientInfo {
 }
 
 // DisconnectClient disconnects a client
-func (p *WebSocketProtocol) DisconnectClient(clientID string, reason string) error {
+func (p *Protocol) DisconnectClient(clientID string, reason string) error {
 	p.clientsMu.RLock()
 	client, exists := p.clients[clientID]
 	p.clientsMu.RUnlock()
@@ -626,14 +626,14 @@ func (p *WebSocketProtocol) DisconnectClient(clientID string, reason string) err
 }
 
 // GetConnectionCount returns the number of connected clients
-func (p *WebSocketProtocol) GetConnectionCount() int {
+func (p *Protocol) GetConnectionCount() int {
 	p.clientsMu.RLock()
 	defer p.clientsMu.RUnlock()
 	return len(p.clients)
 }
 
 // CreateGroup creates a new client group
-func (p *WebSocketProtocol) CreateGroup(groupID string) error {
+func (p *Protocol) CreateGroup(groupID string) error {
 	p.groupsMu.Lock()
 	defer p.groupsMu.Unlock()
 
@@ -646,7 +646,7 @@ func (p *WebSocketProtocol) CreateGroup(groupID string) error {
 }
 
 // DeleteGroup deletes a client group
-func (p *WebSocketProtocol) DeleteGroup(groupID string) error {
+func (p *Protocol) DeleteGroup(groupID string) error {
 	p.groupsMu.Lock()
 	defer p.groupsMu.Unlock()
 
@@ -659,7 +659,7 @@ func (p *WebSocketProtocol) DeleteGroup(groupID string) error {
 }
 
 // JoinGroup adds a client to a group
-func (p *WebSocketProtocol) JoinGroup(clientID, groupID string) error {
+func (p *Protocol) JoinGroup(clientID, groupID string) error {
 	p.groupsMu.Lock()
 	defer p.groupsMu.Unlock()
 
@@ -682,7 +682,7 @@ func (p *WebSocketProtocol) JoinGroup(clientID, groupID string) error {
 }
 
 // LeaveGroup removes a client from a group
-func (p *WebSocketProtocol) LeaveGroup(clientID, groupID string) error {
+func (p *Protocol) LeaveGroup(clientID, groupID string) error {
 	p.groupsMu.Lock()
 	defer p.groupsMu.Unlock()
 
@@ -696,7 +696,7 @@ func (p *WebSocketProtocol) LeaveGroup(clientID, groupID string) error {
 }
 
 // SendToGroup sends a message to all clients in a group
-func (p *WebSocketProtocol) SendToGroup(groupID string, message intrefaces.Message) error {
+func (p *Protocol) SendToGroup(groupID string, message protocol.IMessage) error {
 	p.groupsMu.RLock()
 	group, exists := p.groups[groupID]
 	if !exists {
@@ -714,7 +714,7 @@ func (p *WebSocketProtocol) SendToGroup(groupID string, message intrefaces.Messa
 }
 
 // GetGroupMembers returns a list of client IDs in a group
-func (p *WebSocketProtocol) GetGroupMembers(groupID string) ([]string, error) {
+func (p *Protocol) GetGroupMembers(groupID string) ([]string, error) {
 	p.groupsMu.RLock()
 	defer p.groupsMu.RUnlock()
 
@@ -732,7 +732,7 @@ func (p *WebSocketProtocol) GetGroupMembers(groupID string) ([]string, error) {
 }
 
 // AddMiddleware adds a protocol middleware
-func (p *WebSocketProtocol) AddMiddleware(middleware intrefaces.ProtocolMiddleware) error {
+func (p *Protocol) AddMiddleware(middleware protocol.Middleware) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -754,7 +754,7 @@ func (p *WebSocketProtocol) AddMiddleware(middleware intrefaces.ProtocolMiddlewa
 }
 
 // RemoveMiddleware removes a protocol middleware
-func (p *WebSocketProtocol) RemoveMiddleware(name string) error {
+func (p *Protocol) RemoveMiddleware(name string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -769,11 +769,11 @@ func (p *WebSocketProtocol) RemoveMiddleware(name string) error {
 }
 
 // GetMetrics returns protocol metrics
-func (p *WebSocketProtocol) GetMetrics() intrefaces.ProtocolMetrics {
+func (p *Protocol) GetMetrics() protocol.Metrics {
 	p.metrics.mu.RLock()
 	defer p.metrics.mu.RUnlock()
 
-	return intrefaces.ProtocolMetrics{
+	return protocol.Metrics{
 		ActiveConnections:    atomic.LoadUint64(&p.metrics.ActiveConnections),
 		TotalConnections:     atomic.LoadInt64(&p.metrics.TotalConnections),
 		FailedConnections:    atomic.LoadInt64(&p.metrics.FailedConnections),
@@ -786,27 +786,27 @@ func (p *WebSocketProtocol) GetMetrics() intrefaces.ProtocolMetrics {
 }
 
 // GetClientMetrics returns metrics for a specific client
-func (p *WebSocketProtocol) GetClientMetrics(clientID string) (intrefaces.ClientMetrics, bool) {
+func (p *Protocol) GetClientMetrics(clientID string) (protocol.ClientMetrics, bool) {
 	p.clientsMu.RLock()
 	client, exists := p.clients[clientID]
 	p.clientsMu.RUnlock()
 
 	if !exists {
-		return intrefaces.ClientMetrics{}, false
+		return protocol.ClientMetrics{}, false
 	}
 
 	return client.GetMetrics(), true
 }
 
 // GetConfig returns the protocol configuration
-func (p *WebSocketProtocol) GetConfig() intrefaces.ProtocolConfig {
+func (p *Protocol) GetConfig() protocol.Config {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.config
 }
 
 // UpdateConfig updates the protocol configuration
-func (p *WebSocketProtocol) UpdateConfig(config intrefaces.ProtocolConfig) error {
+func (p *Protocol) UpdateConfig(config protocol.Config) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

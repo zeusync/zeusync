@@ -1,4 +1,4 @@
-package intrefaces
+package protocol
 
 import (
 	"net"
@@ -17,8 +17,8 @@ type Connection interface {
 
 	Send(data []byte) error
 	Receive() ([]byte, error)
-	SendMessage(message Message) error
-	ReceiveMessage() (Message, error)
+	SendMessage(message IMessage) error
+	ReceiveMessage() (IMessage, error)
 
 	// Connection state
 
@@ -44,5 +44,5 @@ type Connection interface {
 
 	OnClose(callback func(string))
 	OnError(callback func(error))
-	OnMessage(callback func(Message))
+	OnMessage(callback func(IMessage))
 }

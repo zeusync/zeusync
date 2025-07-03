@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
 	"sync"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-var _ intrefaces.Message = (*Message)(nil)
+var _ IMessage = (*Message)(nil)
 
 // Message represents a protocol message with thread-safe operations
 type Message struct {
@@ -29,8 +28,8 @@ type Message struct {
 	route       string
 	isResponse  bool
 	responseTo  string
-	priority    intrefaces.MessagePriority
-	qos         intrefaces.QualityOfService
+	priority    MessagePriority
+	qos         QualityOfService
 
 	// Compression state
 	compressed bool
@@ -41,8 +40,8 @@ type Message struct {
 type MessageOptions struct {
 	ID         string
 	MaxSize    int
-	Priority   intrefaces.MessagePriority
-	QoS        intrefaces.QualityOfService
+	Priority   MessagePriority
+	QoS        QualityOfService
 	Headers    map[string]string
 	Route      string
 	Compressed bool
@@ -207,7 +206,7 @@ func (m *Message) ResponseTo() string {
 }
 
 // CreateResponse creates a response message
-func (m *Message) CreateResponse(payload interface{}) intrefaces.Message {
+func (m *Message) CreateResponse(payload interface{}) IMessage {
 	m.mu.RLock()
 	// Получаем все необходимые данные пока держим блокировку
 	messageType := m.messageType
@@ -265,17 +264,17 @@ func (m *Message) marshal() ([]byte, error) {
 
 	// Create message envelope
 	envelope := struct {
-		ID         string                      `json:"id"`
-		Timestamp  time.Time                   `json:"timestamp"`
-		Type       string                      `json:"type"`
-		Payload    interface{}                 `json:"payload"`
-		Headers    map[string]string           `json:"headers"`
-		Route      string                      `json:"route,omitempty"`
-		IsResponse bool                        `json:"is_response,omitempty"`
-		ResponseTo string                      `json:"response_to,omitempty"`
-		Priority   intrefaces.MessagePriority  `json:"priority"`
-		QoS        intrefaces.QualityOfService `json:"qos"`
-		Compressed bool                        `json:"compressed,omitempty"`
+		ID         string            `json:"id"`
+		Timestamp  time.Time         `json:"timestamp"`
+		Type       string            `json:"type"`
+		Payload    interface{}       `json:"payload"`
+		Headers    map[string]string `json:"headers"`
+		Route      string            `json:"route,omitempty"`
+		IsResponse bool              `json:"is_response,omitempty"`
+		ResponseTo string            `json:"response_to,omitempty"`
+		Priority   MessagePriority   `json:"priority"`
+		QoS        QualityOfService  `json:"qos"`
+		Compressed bool              `json:"compressed,omitempty"`
 	}{
 		ID:         m.id,
 		Timestamp:  m.timestamp,
@@ -310,17 +309,17 @@ func (m *Message) Unmarshal(data []byte) error {
 	defer m.mu.Unlock()
 
 	envelope := struct {
-		ID         string                      `json:"id"`
-		Timestamp  time.Time                   `json:"timestamp"`
-		Type       string                      `json:"type"`
-		Payload    json.RawMessage             `json:"payload"`
-		Headers    map[string]string           `json:"headers"`
-		Route      string                      `json:"route,omitempty"`
-		IsResponse bool                        `json:"is_response,omitempty"`
-		ResponseTo string                      `json:"response_to,omitempty"`
-		Priority   intrefaces.MessagePriority  `json:"priority"`
-		QoS        intrefaces.QualityOfService `json:"qos"`
-		Compressed bool                        `json:"compressed,omitempty"`
+		ID         string            `json:"id"`
+		Timestamp  time.Time         `json:"timestamp"`
+		Type       string            `json:"type"`
+		Payload    json.RawMessage   `json:"payload"`
+		Headers    map[string]string `json:"headers"`
+		Route      string            `json:"route,omitempty"`
+		IsResponse bool              `json:"is_response,omitempty"`
+		ResponseTo string            `json:"response_to,omitempty"`
+		Priority   MessagePriority   `json:"priority"`
+		QoS        QualityOfService  `json:"qos"`
+		Compressed bool              `json:"compressed,omitempty"`
 	}{}
 
 	if err := json.Unmarshal(data, &envelope); err != nil {
@@ -344,7 +343,7 @@ func (m *Message) Unmarshal(data []byte) error {
 }
 
 // Clone creates a deep copy of the message
-func (m *Message) Clone() intrefaces.Message {
+func (m *Message) Clone() IMessage {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -397,17 +396,17 @@ func (m *Message) MaxSize() int {
 // calculateSizeWithoutLimit вычисляет размер сообщения без проверки лимита
 func (m *Message) calculateSizeWithoutLimit() int {
 	envelope := struct {
-		ID         string                      `json:"id"`
-		Timestamp  time.Time                   `json:"timestamp"`
-		Type       string                      `json:"type"`
-		Payload    interface{}                 `json:"payload"`
-		Headers    map[string]string           `json:"headers"`
-		Route      string                      `json:"route,omitempty"`
-		IsResponse bool                        `json:"is_response,omitempty"`
-		ResponseTo string                      `json:"response_to,omitempty"`
-		Priority   intrefaces.MessagePriority  `json:"priority"`
-		QoS        intrefaces.QualityOfService `json:"qos"`
-		Compressed bool                        `json:"compressed,omitempty"`
+		ID         string            `json:"id"`
+		Timestamp  time.Time         `json:"timestamp"`
+		Type       string            `json:"type"`
+		Payload    interface{}       `json:"payload"`
+		Headers    map[string]string `json:"headers"`
+		Route      string            `json:"route,omitempty"`
+		IsResponse bool              `json:"is_response,omitempty"`
+		ResponseTo string            `json:"response_to,omitempty"`
+		Priority   MessagePriority   `json:"priority"`
+		QoS        QualityOfService  `json:"qos"`
+		Compressed bool              `json:"compressed,omitempty"`
 	}{
 		ID:         m.id,
 		Timestamp:  m.timestamp,
@@ -491,15 +490,20 @@ func (m *Message) Decompress() error {
 	return nil
 }
 
+// IsCompressed returns true if the message is compressed
+func (m *Message) IsCompressed() bool {
+	return m.compressed
+}
+
 // Priority returns the message priority
-func (m *Message) Priority() intrefaces.MessagePriority {
+func (m *Message) Priority() MessagePriority {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.priority
 }
 
 // SetPriority sets the message priority
-func (m *Message) SetPriority(priority intrefaces.MessagePriority) {
+func (m *Message) SetPriority(priority MessagePriority) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.priority = priority
@@ -507,14 +511,14 @@ func (m *Message) SetPriority(priority intrefaces.MessagePriority) {
 }
 
 // QoS returns the quality of service
-func (m *Message) QoS() intrefaces.QualityOfService {
+func (m *Message) QoS() QualityOfService {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.qos
 }
 
 // SetQoS sets the quality of service
-func (m *Message) SetQoS(qos intrefaces.QualityOfService) {
+func (m *Message) SetQoS(qos QualityOfService) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.qos = qos

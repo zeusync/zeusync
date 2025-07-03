@@ -1,7 +1,7 @@
-package protocol
+package websocket
 
 import (
-	"github.com/zeusync/zeusync/internal/core/protocol/intrefaces"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -12,13 +12,13 @@ import (
 	"github.com/pkg/errors"
 )
 
-var _ intrefaces.Connection = (*WebSocketConnection)(nil)
+var _ protocol.Connection = (*Connection)(nil)
 
-// WebSocketConnection represents a WebSocket client connection
-type WebSocketConnection struct {
+// Connection represents a WebSocket client connection
+type Connection struct {
 	id           string
 	conn         *websocket.Conn
-	config       intrefaces.ProtocolConfig
+	config       protocol.Config
 	mu           sync.RWMutex
 	metadata     map[string]interface{}
 	lastActivity int64 // Unix timestamp
@@ -28,7 +28,7 @@ type WebSocketConnection struct {
 	// Callbacks
 	onClose   func(string)
 	onError   func(error)
-	onMessage func(intrefaces.Message)
+	onMessage func(protocol.IMessage)
 
 	// Metrics
 	messagesSent     uint64
@@ -41,9 +41,9 @@ type WebSocketConnection struct {
 }
 
 // NewWebSocketConnection creates a new WebSocket connection
-func NewWebSocketConnection(conn *websocket.Conn, config intrefaces.ProtocolConfig) *WebSocketConnection {
+func NewWebSocketConnection(conn *websocket.Conn, config protocol.Config) *Connection {
 	now := time.Now()
-	return &WebSocketConnection{
+	return &Connection{
 		id:           uuid.New().String(),
 		conn:         conn,
 		config:       config,
@@ -54,22 +54,22 @@ func NewWebSocketConnection(conn *websocket.Conn, config intrefaces.ProtocolConf
 }
 
 // ID returns the connection ID
-func (c *WebSocketConnection) ID() string {
+func (c *Connection) ID() string {
 	return c.id
 }
 
 // RemoteAddr returns the remote network address
-func (c *WebSocketConnection) RemoteAddr() net.Addr {
+func (c *Connection) RemoteAddr() net.Addr {
 	return c.conn.RemoteAddr()
 }
 
 // LocalAddr returns the local network address
-func (c *WebSocketConnection) LocalAddr() net.Addr {
+func (c *Connection) LocalAddr() net.Addr {
 	return c.conn.LocalAddr()
 }
 
 // Send sends raw data over the connection
-func (c *WebSocketConnection) Send(data []byte) error {
+func (c *Connection) Send(data []byte) error {
 	if c.IsClosed() {
 		return errors.New("connection is closed")
 	}
@@ -95,7 +95,7 @@ func (c *WebSocketConnection) Send(data []byte) error {
 }
 
 // Receive receives raw data from the connection
-func (c *WebSocketConnection) Receive() ([]byte, error) {
+func (c *Connection) Receive() ([]byte, error) {
 	if c.IsClosed() {
 		return nil, errors.New("connection is closed")
 	}
@@ -123,7 +123,7 @@ func (c *WebSocketConnection) Receive() ([]byte, error) {
 }
 
 // SendMessage sends a message over the connection
-func (c *WebSocketConnection) SendMessage(message intrefaces.Message) error {
+func (c *Connection) SendMessage(message protocol.IMessage) error {
 	if c.IsClosed() {
 		return errors.New("connection is closed")
 	}
@@ -174,7 +174,7 @@ func (c *WebSocketConnection) SendMessage(message intrefaces.Message) error {
 }
 
 // ReceiveMessage receives a message from the connection
-func (c *WebSocketConnection) ReceiveMessage() (intrefaces.Message, error) {
+func (c *Connection) ReceiveMessage() (protocol.IMessage, error) {
 	if c.IsClosed() {
 		return nil, errors.New("connection is closed")
 	}
@@ -200,13 +200,13 @@ func (c *WebSocketConnection) ReceiveMessage() (intrefaces.Message, error) {
 	}
 
 	// Create and unmarshal message
-	message := NewMessage("", nil)
+	message := protocol.NewMessage("", nil)
 	if err = message.Unmarshal(data); err != nil {
 		return nil, errors.Wrap(err, "failed to unmarshal message")
 	}
 
 	// Decompress if needed
-	if message.compressed {
+	if message.IsCompressed() {
 		if err = message.Decompress(); err != nil {
 			return nil, errors.Wrap(err, "failed to decompress message")
 		}
@@ -226,28 +226,28 @@ func (c *WebSocketConnection) ReceiveMessage() (intrefaces.Message, error) {
 }
 
 // IsAlive checks if the connection is still active
-func (c *WebSocketConnection) IsAlive() bool {
+func (c *Connection) IsAlive() bool {
 	return atomic.LoadInt32(&c.closed) == 0
 }
 
 // IsClosed checks if the connection is closed
-func (c *WebSocketConnection) IsClosed() bool {
+func (c *Connection) IsClosed() bool {
 	return atomic.LoadInt32(&c.closed) == 1
 }
 
 // LastActivity returns the time of the last activity
-func (c *WebSocketConnection) LastActivity() time.Time {
+func (c *Connection) LastActivity() time.Time {
 	timestamp := atomic.LoadInt64(&c.lastActivity)
 	return time.Unix(timestamp, 0)
 }
 
 // Close closes the connection
-func (c *WebSocketConnection) Close() error {
+func (c *Connection) Close() error {
 	return c.CloseWithReason("connection closed")
 }
 
 // CloseWithReason closes the connection with a specific reason
-func (c *WebSocketConnection) CloseWithReason(reason string) error {
+func (c *Connection) CloseWithReason(reason string) error {
 	if !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
 		return nil // Already closed
 	}
@@ -270,7 +270,7 @@ func (c *WebSocketConnection) CloseWithReason(reason string) error {
 }
 
 // SetTimeout sets the connection timeout
-func (c *WebSocketConnection) SetTimeout(timeout time.Duration) error {
+func (c *Connection) SetTimeout(timeout time.Duration) error {
 	// WebSocket timeouts are handled per operation
 	// This could be used to update the config
 	c.mu.Lock()
@@ -281,14 +281,14 @@ func (c *WebSocketConnection) SetTimeout(timeout time.Duration) error {
 }
 
 // SetKeepAlive sets the keep-alive for the connection
-func (c *WebSocketConnection) SetKeepAlive(keepAlive bool) error {
+func (c *Connection) SetKeepAlive(keepAlive bool) error {
 	// WebSocket has built-in keep-alive via ping/pong
 	// This is handled at the protocol level
 	return nil
 }
 
 // SetBufferSize sets the buffer size for the connection
-func (c *WebSocketConnection) SetBufferSize(size int) error {
+func (c *Connection) SetBufferSize(size int) error {
 	// Buffer sizes are set during connection creation
 	// This could be used for future connections
 	c.mu.Lock()
@@ -298,7 +298,7 @@ func (c *WebSocketConnection) SetBufferSize(size int) error {
 }
 
 // Metadata returns a copy of the connection metadata
-func (c *WebSocketConnection) Metadata() map[string]interface{} {
+func (c *Connection) Metadata() map[string]interface{} {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -310,14 +310,14 @@ func (c *WebSocketConnection) Metadata() map[string]interface{} {
 }
 
 // SetMetadata sets a metadata key-value pair
-func (c *WebSocketConnection) SetMetadata(key string, value interface{}) {
+func (c *Connection) SetMetadata(key string, value interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.metadata[key] = value
 }
 
 // GetMetadata gets a metadata value by key
-func (c *WebSocketConnection) GetMetadata(key string) (interface{}, bool) {
+func (c *Connection) GetMetadata(key string) (interface{}, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	value, exists := c.metadata[key]
@@ -325,28 +325,28 @@ func (c *WebSocketConnection) GetMetadata(key string) (interface{}, bool) {
 }
 
 // OnClose sets a callback for when the connection is closed
-func (c *WebSocketConnection) OnClose(callback func(string)) {
+func (c *Connection) OnClose(callback func(string)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onClose = callback
 }
 
 // OnError sets a callback for connection errors
-func (c *WebSocketConnection) OnError(callback func(error)) {
+func (c *Connection) OnError(callback func(error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onError = callback
 }
 
 // OnMessage sets a callback for received messages
-func (c *WebSocketConnection) OnMessage(callback func(intrefaces.Message)) {
+func (c *Connection) OnMessage(callback func(protocol.IMessage)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onMessage = callback
 }
 
 // ClientInfo returns client information
-func (c *WebSocketConnection) ClientInfo() intrefaces.ClientInfo {
+func (c *Connection) ClientInfo() protocol.ClientInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -371,7 +371,7 @@ func (c *WebSocketConnection) ClientInfo() intrefaces.ClientInfo {
 		}
 	}
 
-	return intrefaces.ClientInfo{
+	return protocol.ClientInfo{
 		ID:              c.id,
 		RemoteAddress:   c.RemoteAddr().String(),
 		ConnectedAt:     c.connectedAt,
@@ -387,8 +387,8 @@ func (c *WebSocketConnection) ClientInfo() intrefaces.ClientInfo {
 }
 
 // GetMetrics returns connection metrics
-func (c *WebSocketConnection) GetMetrics() intrefaces.ClientMetrics {
-	return intrefaces.ClientMetrics{
+func (c *Connection) GetMetrics() protocol.ClientMetrics {
+	return protocol.ClientMetrics{
 		ActiveConnections:    1, // This connection
 		TotalConnections:     1,
 		FailedConnections:    0,
@@ -401,7 +401,7 @@ func (c *WebSocketConnection) GetMetrics() intrefaces.ClientMetrics {
 }
 
 // calculateAverageMessageSize calculates the average message size
-func (c *WebSocketConnection) calculateAverageMessageSize() float64 {
+func (c *Connection) calculateAverageMessageSize() float64 {
 	totalMessages := atomic.LoadUint64(&c.messagesSent) + atomic.LoadUint64(&c.messagesReceived)
 	if totalMessages == 0 {
 		return 0
@@ -411,12 +411,12 @@ func (c *WebSocketConnection) calculateAverageMessageSize() float64 {
 }
 
 // SetPongHandler sets the pong handler for the WebSocket connection
-func (c *WebSocketConnection) SetPongHandler(handler func(string) error) {
+func (c *Connection) SetPongHandler(handler func(string) error) {
 	c.conn.SetPongHandler(handler)
 }
 
 // WriteControl writes a control message with the given deadline
-func (c *WebSocketConnection) WriteControl(messageType int, data []byte, deadline time.Time) error {
+func (c *Connection) WriteControl(messageType int, data []byte, deadline time.Time) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	return c.conn.WriteControl(messageType, data, deadline)
