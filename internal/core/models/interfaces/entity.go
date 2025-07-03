@@ -90,7 +90,7 @@ type FieldType uint16
 
 const (
 	FieldTypeInt FieldType = iota
-	FieldTypeUInt
+	FieldTypeUint
 	FieldTypeString
 	FieldTypeFloat
 	FieldTypeBool
