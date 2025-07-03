@@ -16,9 +16,9 @@ func TestWebSocketProtocol_Lifecycle(t *testing.T) {
 		Host:           "127.0.0.1",
 		Port:           8080,
 		MaxConnections: 100,
-		ReadTimeout:    30 * time.Second,
-		WriteTimeout:   30 * time.Second,
-		BufferSize:     4096,
+		ReadTimeout:    5 * time.Second,
+		WriteTimeout:   5 * time.Second,
+		BufferSize:     1024 * 4,
 		WorkerCount:    5,
 		QueueSize:      1000,
 	}

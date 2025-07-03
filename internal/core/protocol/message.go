@@ -209,20 +209,43 @@ func (m *Message) ResponseTo() string {
 // CreateResponse creates a response message
 func (m *Message) CreateResponse(payload interface{}) intrefaces.Message {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	// Получаем все необходимые данные пока держим блокировку
+	messageType := m.messageType
+	maxSize := m.maxSize
+	priority := m.priority
+	qos := m.qos
+	route := m.route
+	id := m.id
 
-	resp := NewMessage(m.messageType, payload, MessageOptions{
-		MaxSize:  m.maxSize,
-		Priority: m.priority,
-		QoS:      m.qos,
-		Route:    m.route,
+	// Получаем заголовки для обмена source/target
+	var sourceHeader, targetHeader string
+	if m.headers != nil {
+		sourceHeader = m.headers["target"] // target становится source в ответе
+		targetHeader = m.headers["source"] // source становится target в ответе
+	}
+	m.mu.RUnlock()
+
+	// Создаем заголовки для нового сообщения
+	headers := make(map[string]string)
+	if sourceHeader != "" {
+		headers["source"] = sourceHeader
+	}
+	if targetHeader != "" {
+		headers["target"] = targetHeader
+	}
+
+	resp := NewMessage(messageType, payload, MessageOptions{
+		MaxSize:  maxSize,
+		Priority: priority,
+		QoS:      qos,
+		Route:    route,
+		Headers:  headers,
 	})
 
+	// Устанавливаем поля ответа без дополнительных блокировок
 	resp.mu.Lock()
 	resp.isResponse = true
-	resp.responseTo = m.id
-	resp.SetHeader("source", m.GetHeader("target"))
-	resp.SetHeader("target", m.GetHeader("source"))
+	resp.responseTo = id
 	resp.mu.Unlock()
 
 	return resp
@@ -354,8 +377,14 @@ func (m *Message) Clone() intrefaces.Message {
 
 // Size returns the message size in bytes
 func (m *Message) Size() int {
-	data := m.Data()
-	return len(data)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.data == nil {
+		// Вычисляем размер без проверки лимита
+		return m.calculateSizeWithoutLimit()
+	}
+	return len(m.data)
 }
 
 // MaxSize returns the maximum allowed message size
@@ -363,6 +392,41 @@ func (m *Message) MaxSize() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.maxSize
+}
+
+// calculateSizeWithoutLimit вычисляет размер сообщения без проверки лимита
+func (m *Message) calculateSizeWithoutLimit() int {
+	envelope := struct {
+		ID         string                      `json:"id"`
+		Timestamp  time.Time                   `json:"timestamp"`
+		Type       string                      `json:"type"`
+		Payload    interface{}                 `json:"payload"`
+		Headers    map[string]string           `json:"headers"`
+		Route      string                      `json:"route,omitempty"`
+		IsResponse bool                        `json:"is_response,omitempty"`
+		ResponseTo string                      `json:"response_to,omitempty"`
+		Priority   intrefaces.MessagePriority  `json:"priority"`
+		QoS        intrefaces.QualityOfService `json:"qos"`
+		Compressed bool                        `json:"compressed,omitempty"`
+	}{
+		ID:         m.id,
+		Timestamp:  m.timestamp,
+		Type:       m.messageType,
+		Payload:    m.payload,
+		Headers:    m.headers,
+		Route:      m.route,
+		IsResponse: m.isResponse,
+		ResponseTo: m.responseTo,
+		Priority:   m.priority,
+		QoS:        m.qos,
+		Compressed: m.compressed,
+	}
+
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return 0
+	}
+	return len(data)
 }
 
 // Compress compresses the message data using gzip
@@ -471,8 +535,18 @@ func (m *Message) Validate() error {
 	if m.timestamp.IsZero() {
 		return errors.New("message timestamp is required")
 	}
-	if m.Size() > m.maxSize {
-		return fmt.Errorf("message size %d exceeds maximum %d", m.Size(), m.maxSize)
+
+	// Вычисляем размер без вызова m.Size() чтобы избежать дедлока
+	var size int
+	if m.data == nil {
+		// Вычисляем размер без проверки лимита в marshal
+		size = m.calculateSizeWithoutLimit()
+	} else {
+		size = len(m.data)
+	}
+
+	if size > m.maxSize {
+		return fmt.Errorf("message size %d exceeds maximum %d", size, m.maxSize)
 	}
 
 	return nil
