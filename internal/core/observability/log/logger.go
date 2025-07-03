@@ -164,6 +164,8 @@ func toZapFields(fields ...Field) []zap.Field {
 			zapFields[i] = zap.Float64(f.Key, f.Value.(float64))
 		case Float32Type:
 			zapFields[i] = zap.Float32(f.Key, f.Value.(float32))
+		case IntType:
+			zapFields[i] = zap.Int(f.Key, f.Value.(int))
 		case Int64Type:
 			zapFields[i] = zap.Int64(f.Key, f.Value.(int64))
 		case Int32Type:
@@ -174,6 +176,8 @@ func toZapFields(fields ...Field) []zap.Field {
 			zapFields[i] = zap.Int8(f.Key, f.Value.(int8))
 		case StringType:
 			zapFields[i] = zap.String(f.Key, f.Value.(string))
+		case UintType:
+			zapFields[i] = zap.Uint(f.Key, f.Value.(uint))
 		case Uint64Type:
 			zapFields[i] = zap.Uint64(f.Key, f.Value.(uint64))
 		case Uint32Type:

@@ -53,6 +53,7 @@ const (
 	DurationType
 	Float64Type
 	Float32Type
+	IntType
 	Int64Type
 	Int32Type
 	Int16Type
@@ -60,6 +61,7 @@ const (
 	StringType
 	TimeType
 	TimeFullType
+	UintType
 	Uint64Type
 	Uint32Type
 	Uint16Type
@@ -132,6 +134,14 @@ func Float32(key string, val float32) Field {
 	}
 }
 
+func Int(key string, val int) Field {
+	return Field{
+		Key:   key,
+		Type:  IntType,
+		Value: val,
+	}
+}
+
 func Int64(key string, val int64) Field {
 	return Field{
 		Key:   key,
@@ -184,6 +194,14 @@ func TimeFull(key string, val time.Time) Field {
 	return Field{
 		Key:   key,
 		Type:  TimeFullType,
+		Value: val,
+	}
+}
+
+func Uint(key string, val uint) Field {
+	return Field{
+		Key:   key,
+		Type:  UintType,
 		Value: val,
 	}
 }

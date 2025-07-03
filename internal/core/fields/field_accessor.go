@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// maxRetries is the maximum number of retries for transactional operations.
+const maxRetries = 25
+
 var _ FieldAccessor[any] = (*FA[any])(nil)
 
 // FA is a generic field accessor implementation that provides thread-safe access
@@ -52,6 +55,7 @@ func NewFA[T any](initial ...T) *FA[T] {
 	}
 
 	fa.value.Store(initialValue)
+	fa.version.Store(1)
 	fa.addToHistory(initialValue, 0)
 
 	return fa
@@ -167,7 +171,7 @@ func (f *FA[T]) SubscribeCh() (ch <-chan T, unsubscribe func()) {
 // SubscribeIfCh returns a channel that receives filtered value updates and an unsubscribe function.
 // Only values that pass the filter function (if provided) are sent to the channel.
 func (f *FA[T]) SubscribeIfCh(filter func(T) bool) (ch <-chan T, unsubscribe func()) {
-	outCh := make(chan T, 100)
+	outCh := make(chan T, 10)
 	cancelCh := make(chan struct{})
 
 	go func() {
@@ -229,9 +233,8 @@ func (f *FA[T]) Swap(new T) T {
 // Transaction performs an atomic update using the provided update function.
 // The update function receives the current value and should return the new value.
 // The operation is retried until it succeeds or a maximum number of attempts is reached.
+// Default retries are set to 25.
 func (f *FA[T]) Transaction(update func(current T) T) (final T) {
-	const maxRetries = 100
-
 	for i := 0; i < maxRetries; i++ {
 		current := f.Get()
 		updated := update(current)
