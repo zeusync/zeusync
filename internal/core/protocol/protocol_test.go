@@ -274,13 +274,25 @@ func TestMessage_Validation(t *testing.T) {
 	assert.NoError(t, err, "valid message should pass validation")
 
 	// Test message size limits
-	largePayload := make([]byte, 2*1024*1024) // 2MB
+	// Создаем payload, который точно превысит лимит после JSON маршалинга
+	largePayload := make(map[string]interface{})
+	// Создаем большую строку, которая после JSON кодирования будет больше 1MB
+	bigString := string(make([]byte, 1024*1024)) // 1MB строка
+	largePayload["data"] = bigString
+
 	largeMessage := NewMessage("large", largePayload, MessageOptions{
-		MaxSize: 1024 * 1024, // 1MB limit
+		MaxSize: 512 * 1024, // 512KB limit - меньше чем размер payload
 	})
 
 	err = largeMessage.Validate()
 	assert.Error(t, err, "oversized message should fail validation")
+
+	normalMessage := NewMessage("normal", "small payload", MessageOptions{
+		MaxSize: 1024 * 1024, // 1MB limit
+	})
+
+	err = normalMessage.Validate()
+	assert.NoError(t, err, "normal sized message should pass validation")
 }
 
 // Benchmark tests
@@ -293,6 +305,7 @@ func BenchmarkMessage_Marshal(b *testing.B) {
 	message := NewMessage("benchmark", payload)
 
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_, err := message.Marshal()
 		if err != nil {
@@ -314,9 +327,10 @@ func BenchmarkMessage_Unmarshal(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		newMessage := NewMessage("", nil)
-		err := newMessage.Unmarshal(data)
+		err = newMessage.Unmarshal(data)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -332,6 +346,7 @@ func BenchmarkMessage_Clone(b *testing.B) {
 	message := NewMessage("benchmark", payload)
 
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = message.Clone()
 	}
