@@ -1,557 +1,388 @@
 package protocol
 
 import (
-	"bytes"
-	"compress/gzip"
-	"encoding/json"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pkg/errors"
 )
 
-var _ IMessage = (*Message)(nil)
-
-// Message represents a protocol message with thread-safe operations
-type Message struct {
+// BinaryMessage - высокопроизводительная реализация Message с бинарной сериализацией
+type BinaryMessage struct {
 	mu sync.RWMutex
 
-	// Core fields
-	id          string
-	timestamp   time.Time
-	messageType string
-	data        []byte
-	payload     interface{}
-	headers     map[string]string
-	route       string
-	isResponse  bool
-	responseTo  string
-	priority    MessagePriority
-	qos         QualityOfService
-
-	// Compression state
-	compressed bool
-	maxSize    int
+	id        string
+	msgType   string
+	payload   []byte
+	timestamp time.Time
+	headers   map[string]string
 }
 
-// MessageOptions provides configuration for message creation
-type MessageOptions struct {
-	ID         string
-	MaxSize    int
-	Priority   MessagePriority
-	QoS        QualityOfService
-	Headers    map[string]string
-	Route      string
-	Compressed bool
-}
-
-// NewMessage creates a new message with the given type and payload
-func NewMessage(messageType string, payload any, opts ...MessageOptions) *Message {
-	var options MessageOptions
-	if len(opts) > 0 {
-		options = opts[0]
-	}
-
-	id := options.ID
-	if id == "" {
-		id = uuid.New().String()
-	}
-
-	headers := make(map[string]string)
-	if options.Headers != nil {
-		for k, v := range options.Headers {
-			headers[k] = v
-		}
-	}
-
-	maxSize := options.MaxSize
-	if maxSize == 0 {
-		maxSize = 1024 * 1024 // 1MB default
-	}
-
-	return &Message{
-		id:          id,
-		timestamp:   time.Now(),
-		messageType: messageType,
-		payload:     payload,
-		headers:     headers,
-		route:       options.Route,
-		priority:    options.Priority,
-		qos:         options.QoS,
-		compressed:  options.Compressed,
-		maxSize:     maxSize,
+// NewMessage создает новое сообщение
+func NewMessage(msgType string, payload []byte) Message {
+	return &BinaryMessage{
+		id:        uuid.New().String(),
+		msgType:   msgType,
+		payload:   payload,
+		timestamp: time.Now(),
+		headers:   make(map[string]string),
 	}
 }
 
-// Type returns the message type
-func (m *Message) Type() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.messageType
-}
-
-// Data returns the raw message data
-func (m *Message) Data() []byte {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.data == nil {
-		// Lazy marshaling
-		data, _ := m.marshal()
-		return data
+// NewMessageWithID создает сообщение с заданным ID
+func NewMessageWithID(id, msgType string, payload []byte) Message {
+	return &BinaryMessage{
+		id:        id,
+		msgType:   msgType,
+		payload:   payload,
+		timestamp: time.Now(),
+		headers:   make(map[string]string),
 	}
-	return append([]byte(nil), m.data...)
 }
 
-// Payload returns the message payload
-func (m *Message) Payload() interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.payload
-}
-
-// SetPayload sets the message payload
-func (m *Message) SetPayload(payload interface{}) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.payload = payload
-	m.data = nil // Invalidate cached data
-	return nil
-}
-
-// ID returns the message ID
-func (m *Message) ID() string {
+// ID возвращает уникальный идентификатор сообщения
+func (m *BinaryMessage) ID() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.id
 }
 
-// Timestamp returns the message timestamp
-func (m *Message) Timestamp() time.Time {
+// Type возвращает тип сообщения
+func (m *BinaryMessage) Type() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.msgType
+}
+
+// Payload возвращает полезную нагрузку сообщения
+func (m *BinaryMessage) Payload() []byte {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	// Возвращаем копию для безопасности
+	if m.payload == nil {
+		return nil
+	}
+	result := make([]byte, len(m.payload))
+	copy(result, m.payload)
+	return result
+}
+
+// Timestamp возвращает время создания сообщения
+func (m *BinaryMessage) Timestamp() time.Time {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.timestamp
 }
 
-// Source returns the message source
-func (m *Message) Source() string {
-	return m.GetHeader("source")
-}
-
-// Target returns the message target
-func (m *Message) Target() string {
-	return m.GetHeader("target")
-}
-
-// Headers returns a copy of the message headers
-func (m *Message) Headers() map[string]string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	headers := make(map[string]string, len(m.headers))
-	for k, v := range m.headers {
-		headers[k] = v
-	}
-	return headers
-}
-
-// SetHeader sets a message header
-func (m *Message) SetHeader(key, value string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.headers == nil {
-		m.headers = make(map[string]string)
-	}
-	m.headers[key] = value
-	m.data = nil // Invalidate cached data
-}
-
-// GetHeader gets a message header
-func (m *Message) GetHeader(key string) string {
+// GetHeader возвращает значение заголовка
+func (m *BinaryMessage) GetHeader(key string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.headers[key]
 }
 
-// Route returns the message route
-func (m *Message) Route() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.route
-}
-
-// SetRoute sets the message route
-func (m *Message) SetRoute(route string) {
+// SetHeader устанавливает значение заголовка
+func (m *BinaryMessage) SetHeader(key, value string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.route = route
-	m.data = nil // Invalidate cached data
+	if m.headers == nil {
+		m.headers = make(map[string]string)
+	}
+	m.headers[key] = value
 }
 
-// IsResponse returns true if the message is a response
-func (m *Message) IsResponse() bool {
+// Headers возвращает копию всех заголовков
+func (m *BinaryMessage) Headers() map[string]string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.isResponse
-}
-
-// ResponseTo returns the ID of the message this is a response to
-func (m *Message) ResponseTo() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.responseTo
-}
-
-// CreateResponse creates a response message
-func (m *Message) CreateResponse(payload interface{}) IMessage {
-	m.mu.RLock()
-	// Получаем все необходимые данные пока держим блокировку
-	messageType := m.messageType
-	maxSize := m.maxSize
-	priority := m.priority
-	qos := m.qos
-	route := m.route
-	id := m.id
-
-	// Получаем заголовки для обмена source/target
-	var sourceHeader, targetHeader string
-	if m.headers != nil {
-		sourceHeader = m.headers["target"] // target становится source в ответе
-		targetHeader = m.headers["source"] // source становится target в ответе
-	}
-	m.mu.RUnlock()
-
-	// Создаем заголовки для нового сообщения
-	headers := make(map[string]string)
-	if sourceHeader != "" {
-		headers["source"] = sourceHeader
-	}
-	if targetHeader != "" {
-		headers["target"] = targetHeader
-	}
-
-	resp := NewMessage(messageType, payload, MessageOptions{
-		MaxSize:  maxSize,
-		Priority: priority,
-		QoS:      qos,
-		Route:    route,
-		Headers:  headers,
-	})
-
-	// Устанавливаем поля ответа без дополнительных блокировок
-	resp.mu.Lock()
-	resp.isResponse = true
-	resp.responseTo = id
-	resp.mu.Unlock()
-
-	return resp
-}
-
-// Marshal serializes the message to bytes
-func (m *Message) Marshal() ([]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.marshal()
-}
-
-func (m *Message) marshal() ([]byte, error) {
-	if m.data != nil {
-		return append([]byte(nil), m.data...), nil
-	}
-
-	// Create message envelope
-	envelope := struct {
-		ID         string            `json:"id"`
-		Timestamp  time.Time         `json:"timestamp"`
-		Type       string            `json:"type"`
-		Payload    interface{}       `json:"payload"`
-		Headers    map[string]string `json:"headers"`
-		Route      string            `json:"route,omitempty"`
-		IsResponse bool              `json:"is_response,omitempty"`
-		ResponseTo string            `json:"response_to,omitempty"`
-		Priority   MessagePriority   `json:"priority"`
-		QoS        QualityOfService  `json:"qos"`
-		Compressed bool              `json:"compressed,omitempty"`
-	}{
-		ID:         m.id,
-		Timestamp:  m.timestamp,
-		Type:       m.messageType,
-		Payload:    m.payload,
-		Headers:    m.headers,
-		Route:      m.route,
-		IsResponse: m.isResponse,
-		ResponseTo: m.responseTo,
-		Priority:   m.priority,
-		QoS:        m.qos,
-		Compressed: m.compressed,
-	}
-
-	data, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to marshal message")
-	}
-
-	// Check size limit
-	if len(data) > m.maxSize {
-		return nil, errors.Errorf("message size %d exceeds limit %d", len(data), m.maxSize)
-	}
-
-	m.data = data
-	return append([]byte(nil), data...), nil
-}
-
-// Unmarshal deserializes a message from bytes
-func (m *Message) Unmarshal(data []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	envelope := struct {
-		ID         string            `json:"id"`
-		Timestamp  time.Time         `json:"timestamp"`
-		Type       string            `json:"type"`
-		Payload    json.RawMessage   `json:"payload"`
-		Headers    map[string]string `json:"headers"`
-		Route      string            `json:"route,omitempty"`
-		IsResponse bool              `json:"is_response,omitempty"`
-		ResponseTo string            `json:"response_to,omitempty"`
-		Priority   MessagePriority   `json:"priority"`
-		QoS        QualityOfService  `json:"qos"`
-		Compressed bool              `json:"compressed,omitempty"`
-	}{}
-
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		return errors.Wrap(err, "failed to unmarshal message envelope")
-	}
-
-	m.id = envelope.ID
-	m.timestamp = envelope.Timestamp
-	m.messageType = envelope.Type
-	m.payload = envelope.Payload
-	m.headers = envelope.Headers
-	m.route = envelope.Route
-	m.isResponse = envelope.IsResponse
-	m.responseTo = envelope.ResponseTo
-	m.priority = envelope.Priority
-	m.qos = envelope.QoS
-	m.compressed = envelope.Compressed
-	m.data = append([]byte(nil), data...)
-
-	return nil
-}
-
-// Clone creates a deep copy of the message
-func (m *Message) Clone() IMessage {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	headers := make(map[string]string, len(m.headers))
+	result := make(map[string]string, len(m.headers))
 	for k, v := range m.headers {
-		headers[k] = v
+		result[k] = v
+	}
+	return result
+}
+
+// Size возвращает размер сообщения в байтах
+func (m *BinaryMessage) Size() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	size := 0
+	size += 16                 // UUID (фиксированный размер)
+	size += 8                  // timestamp
+	size += 2 + len(m.msgType) // длина типа + тип
+	size += 4 + len(m.payload) // длина payload + payload
+	size += 2                  // количество заголовков
+
+	for k, v := range m.headers {
+		size += 2 + len(k) // длина ключа + ключ
+		size += 2 + len(v) // длина значения + значение
 	}
 
-	clone := &Message{
-		id:          m.id,
-		timestamp:   m.timestamp,
-		messageType: m.messageType,
-		payload:     m.payload, // Shallow copy of payload
-		headers:     headers,
-		route:       m.route,
-		isResponse:  m.isResponse,
-		responseTo:  m.responseTo,
-		priority:    m.priority,
-		qos:         m.qos,
-		compressed:  m.compressed,
-		maxSize:     m.maxSize,
+	return size
+}
+
+// Clone создает копию сообщения
+func (m *BinaryMessage) Clone() Message {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	clone := &BinaryMessage{
+		id:        m.id,
+		msgType:   m.msgType,
+		timestamp: m.timestamp,
+		headers:   make(map[string]string, len(m.headers)),
 	}
 
-	if m.data != nil {
-		clone.data = append([]byte(nil), m.data...)
+	// Копируем payload
+	if m.payload != nil {
+		clone.payload = make([]byte, len(m.payload))
+		copy(clone.payload, m.payload)
+	}
+
+	// Копируем заг��ловки
+	for k, v := range m.headers {
+		clone.headers[k] = v
 	}
 
 	return clone
 }
 
-// Size returns the message size in bytes
-func (m *Message) Size() int {
+// Marshal сериализует сообщение в бинарный формат
+// Формат:
+// [16 bytes] UUID
+// [8 bytes]  timestamp (unix nano)
+// [2 bytes]  type length
+// [N bytes]  type
+// [4 bytes]  payload length
+// [N bytes]  payload
+// [2 bytes]  headers count
+// [headers]  key_len(2) + key + value_len(2) + value
+func (m *BinaryMessage) Marshal() ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if m.data == nil {
-		// Вычисляем размер без проверки лимита
-		return m.calculateSizeWithoutLimit()
-	}
-	return len(m.data)
-}
+	// Вычисляем общий размер
+	totalSize := m.Size()
+	buf := make([]byte, totalSize)
+	offset := 0
 
-// MaxSize returns the maximum allowed message size
-func (m *Message) MaxSize() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.maxSize
-}
-
-// calculateSizeWithoutLimit вычисляет размер сообщения без проверки лимита
-func (m *Message) calculateSizeWithoutLimit() int {
-	envelope := struct {
-		ID         string            `json:"id"`
-		Timestamp  time.Time         `json:"timestamp"`
-		Type       string            `json:"type"`
-		Payload    interface{}       `json:"payload"`
-		Headers    map[string]string `json:"headers"`
-		Route      string            `json:"route,omitempty"`
-		IsResponse bool              `json:"is_response,omitempty"`
-		ResponseTo string            `json:"response_to,omitempty"`
-		Priority   MessagePriority   `json:"priority"`
-		QoS        QualityOfService  `json:"qos"`
-		Compressed bool              `json:"compressed,omitempty"`
-	}{
-		ID:         m.id,
-		Timestamp:  m.timestamp,
-		Type:       m.messageType,
-		Payload:    m.payload,
-		Headers:    m.headers,
-		Route:      m.route,
-		IsResponse: m.isResponse,
-		ResponseTo: m.responseTo,
-		Priority:   m.priority,
-		QoS:        m.qos,
-		Compressed: m.compressed,
-	}
-
-	data, err := json.Marshal(envelope)
+	// UUID (16 bytes)
+	uuidBytes, err := uuid.Parse(m.id)
 	if err != nil {
-		return 0
+		return nil, fmt.Errorf("invalid UUID: %w", err)
 	}
-	return len(data)
+	copy(buf[offset:], uuidBytes[:])
+	offset += 16
+
+	// Timestamp (8 bytes)
+	binary.LittleEndian.PutUint64(buf[offset:], uint64(m.timestamp.UnixNano()))
+	offset += 8
+
+	// Type length + type
+	typeBytes := []byte(m.msgType)
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(typeBytes)))
+	offset += 2
+	copy(buf[offset:], typeBytes)
+	offset += len(typeBytes)
+
+	// Payload length + payload
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(m.payload)))
+	offset += 4
+	if len(m.payload) > 0 {
+		copy(buf[offset:], m.payload)
+		offset += len(m.payload)
+	}
+
+	// Headers count
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(m.headers)))
+	offset += 2
+
+	// Headers
+	for k, v := range m.headers {
+		keyBytes := []byte(k)
+		valueBytes := []byte(v)
+
+		// Key length + key
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(keyBytes)))
+		offset += 2
+		copy(buf[offset:], keyBytes)
+		offset += len(keyBytes)
+
+		// Value length + value
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(valueBytes)))
+		offset += 2
+		copy(buf[offset:], valueBytes)
+		offset += len(valueBytes)
+	}
+
+	return buf, nil
 }
 
-// Compress compresses the message data using gzip
-func (m *Message) Compress() error {
+// Unmarshal десериализует сообщение из бинарного формата
+func (m *BinaryMessage) Unmarshal(data []byte) error {
+	if len(data) < 30 { // Минимальный размер: 16+8+2+0+4+0+2 = 32, но может быть пустой тип
+		return fmt.Errorf("data too short: %d bytes", len(data))
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.compressed {
-		return nil // Already compressed
+	offset := 0
+
+	// UUID (16 bytes)
+	uuidBytes := make([]byte, 16)
+	copy(uuidBytes, data[offset:offset+16])
+	m.id = uuid.Must(uuid.FromBytes(uuidBytes)).String()
+	offset += 16
+
+	// Timestamp (8 bytes)
+	timestampNano := binary.LittleEndian.Uint64(data[offset : offset+8])
+	m.timestamp = time.Unix(0, int64(timestampNano))
+	offset += 8
+
+	// Type length + type
+	if offset+2 > len(data) {
+		return fmt.Errorf("insufficient data for type length")
 	}
+	typeLen := binary.LittleEndian.Uint16(data[offset : offset+2])
+	offset += 2
 
-	data, err := m.marshal()
-	if err != nil {
-		return errors.Wrap(err, "failed to marshal before compression")
+	if offset+int(typeLen) > len(data) {
+		return fmt.Errorf("insufficient data for type")
 	}
+	m.msgType = string(data[offset : offset+int(typeLen)])
+	offset += int(typeLen)
 
-	var buf bytes.Buffer
-	gzWriter := gzip.NewWriter(&buf)
-
-	if _, err = gzWriter.Write(data); err != nil {
-		_ = gzWriter.Close()
-		return errors.Wrap(err, "failed to compress data")
+	// Payload length + payload
+	if offset+4 > len(data) {
+		return fmt.Errorf("insufficient data for payload length")
 	}
+	payloadLen := binary.LittleEndian.Uint32(data[offset : offset+4])
+	offset += 4
 
-	if err = gzWriter.Close(); err != nil {
-		return errors.Wrap(err, "failed to close gzip writer")
+	if offset+int(payloadLen) > len(data) {
+		return fmt.Errorf("insufficient data for payload")
 	}
-
-	m.data = buf.Bytes()
-	m.compressed = true
-	return nil
-}
-
-// Decompress decompresses the message data
-func (m *Message) Decompress() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if !m.compressed {
-		return nil // Not compressed
-	}
-
-	if m.data == nil {
-		return errors.New("no data to decompress")
-	}
-
-	gzReader, err := gzip.NewReader(bytes.NewReader(m.data))
-	if err != nil {
-		return errors.Wrap(err, "failed to create gzip reader")
-	}
-	defer func() {
-		_ = gzReader.Close()
-	}()
-
-	var buf bytes.Buffer
-	if _, err = buf.ReadFrom(gzReader); err != nil {
-		return errors.Wrap(err, "failed to decompress data")
-	}
-
-	m.data = buf.Bytes()
-	m.compressed = false
-	return nil
-}
-
-// IsCompressed returns true if the message is compressed
-func (m *Message) IsCompressed() bool {
-	return m.compressed
-}
-
-// Priority returns the message priority
-func (m *Message) Priority() MessagePriority {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.priority
-}
-
-// SetPriority sets the message priority
-func (m *Message) SetPriority(priority MessagePriority) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.priority = priority
-	m.data = nil // Invalidate cached data
-}
-
-// QoS returns the quality of service
-func (m *Message) QoS() QualityOfService {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.qos
-}
-
-// SetQoS sets the quality of service
-func (m *Message) SetQoS(qos QualityOfService) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.qos = qos
-	m.data = nil // Invalidate cached data
-}
-
-// Validate validates the message structure
-func (m *Message) Validate() error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if m.id == "" {
-		return errors.New("message ID is required")
-	}
-	if m.messageType == "" {
-		return errors.New("message type is required")
-	}
-	if m.timestamp.IsZero() {
-		return errors.New("message timestamp is required")
-	}
-
-	// Вычисляем размер без вызова m.Size() чтобы избежать дедлока
-	var size int
-	if m.data == nil {
-		// Вычисляем размер без проверки лимита в marshal
-		size = m.calculateSizeWithoutLimit()
+	if payloadLen > 0 {
+		m.payload = make([]byte, payloadLen)
+		copy(m.payload, data[offset:offset+int(payloadLen)])
+		offset += int(payloadLen)
 	} else {
-		size = len(m.data)
+		m.payload = nil
 	}
 
-	if size > m.maxSize {
-		return fmt.Errorf("message size %d exceeds maximum %d", size, m.maxSize)
+	// Headers count
+	if offset+2 > len(data) {
+		return fmt.Errorf("insufficient data for headers count")
+	}
+	headersCount := binary.LittleEndian.Uint16(data[offset : offset+2])
+	offset += 2
+
+	// Headers
+	m.headers = make(map[string]string, headersCount)
+	for i := uint16(0); i < headersCount; i++ {
+		// Key length + key
+		if offset+2 > len(data) {
+			return fmt.Errorf("insufficient data for header key length")
+		}
+		keyLen := binary.LittleEndian.Uint16(data[offset : offset+2])
+		offset += 2
+
+		if offset+int(keyLen) > len(data) {
+			return fmt.Errorf("insufficient data for header key")
+		}
+		key := string(data[offset : offset+int(keyLen)])
+		offset += int(keyLen)
+
+		// Value length + value
+		if offset+2 > len(data) {
+			return fmt.Errorf("insufficient data for header value length")
+		}
+		valueLen := binary.LittleEndian.Uint16(data[offset : offset+2])
+		offset += 2
+
+		if offset+int(valueLen) > len(data) {
+			return fmt.Errorf("insufficient data for header value")
+		}
+		value := string(data[offset : offset+int(valueLen)])
+		offset += int(valueLen)
+
+		m.headers[key] = value
 	}
 
 	return nil
+}
+
+// MessagePool - пул для переиспользования сообщений
+type MessagePool struct {
+	pool sync.Pool
+}
+
+// NewMessagePool создает новый пул сообщений
+func NewMessagePool() *MessagePool {
+	return &MessagePool{
+		pool: sync.Pool{
+			New: func() interface{} {
+				return &BinaryMessage{
+					headers: make(map[string]string),
+				}
+			},
+		},
+	}
+}
+
+// Get получает сообщение из пула
+func (p *MessagePool) Get() *BinaryMessage {
+	msg := p.pool.Get().(*BinaryMessage)
+	msg.reset()
+	return msg
+}
+
+// Put возвращает сообщение в пул
+func (p *MessagePool) Put(msg *BinaryMessage) {
+	if msg != nil {
+		p.pool.Put(msg)
+	}
+}
+
+// reset очищает сообщение для переиспользования
+func (m *BinaryMessage) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.id = ""
+	m.msgType = ""
+	m.payload = nil
+	m.timestamp = time.Time{}
+
+	// Очищаем map, но сохраняем выделенную память
+	for k := range m.headers {
+		delete(m.headers, k)
+	}
+}
+
+// Release возвращает сообщение в глобальный пул
+func (m *BinaryMessage) Release() {
+	defaultMessagePool.Put(m)
+}
+
+// Глобальный пул сообщений
+var defaultMessagePool = NewMessagePool()
+
+// GetPooledMessage получает сообщение из глобального пула
+func GetPooledMessage(msgType string, payload []byte) *BinaryMessage {
+	msg := defaultMessagePool.Get()
+	msg.id = uuid.New().String()
+	msg.msgType = msgType
+	msg.timestamp = time.Now()
+
+	if payload != nil {
+		msg.payload = make([]byte, len(payload))
+		copy(msg.payload, payload)
+	}
+
+	return msg
 }
