@@ -105,7 +105,7 @@ func NewServer(config Config, transport Transport) Protocol {
 }
 
 // Start запускает сервер
-func (s *Server) Start(ctx context.Context, config Config) error {
+func (s *Server) Start(_ context.Context, config Config) error {
 	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
 		return fmt.Errorf("server already running")
 	}
@@ -139,7 +139,7 @@ func (s *Server) Start(ctx context.Context, config Config) error {
 }
 
 // Stop останавливает сервер
-func (s *Server) Stop(ctx context.Context) error {
+func (s *Server) Stop(_ context.Context) error {
 	if !atomic.CompareAndSwapInt32(&s.running, 1, 0) {
 		return fmt.Errorf("server not running")
 	}
@@ -190,7 +190,7 @@ func (s *Server) SendToClient(clientID string, message Message) error {
 	s.clientsMu.RUnlock()
 
 	if !exists {
-		return &ProtocolError{
+		return &Error{
 			Code:    ErrorCodeClientNotFound,
 			Message: fmt.Sprintf("client %s not found", clientID),
 		}
@@ -258,7 +258,7 @@ func (s *Server) CreateGroup(groupID string) error {
 	defer s.groupsMu.Unlock()
 
 	if _, exists := s.groups[groupID]; exists {
-		return &ProtocolError{
+		return &Error{
 			Code:    "GROUP_EXISTS",
 			Message: fmt.Sprintf("group %s already exists", groupID),
 		}
@@ -284,7 +284,7 @@ func (s *Server) DeleteGroup(groupID string) error {
 
 	group, exists := s.groups[groupID]
 	if !exists {
-		return &ProtocolError{
+		return &Error{
 			Code:    ErrorCodeGroupNotFound,
 			Message: fmt.Sprintf("group %s not found", groupID),
 		}
@@ -312,7 +312,7 @@ func (s *Server) AddClientToGroup(clientID, groupID string) error {
 	s.clientsMu.RUnlock()
 
 	if !clientExists {
-		return &ProtocolError{
+		return &Error{
 			Code:    ErrorCodeClientNotFound,
 			Message: fmt.Sprintf("client %s not found", clientID),
 		}
@@ -323,7 +323,7 @@ func (s *Server) AddClientToGroup(clientID, groupID string) error {
 	s.groupsMu.RUnlock()
 
 	if !groupExists {
-		return &ProtocolError{
+		return &Error{
 			Code:    ErrorCodeGroupNotFound,
 			Message: fmt.Sprintf("group %s not found", groupID),
 		}
@@ -333,7 +333,7 @@ func (s *Server) AddClientToGroup(clientID, groupID string) error {
 	defer group.mu.Unlock()
 
 	if len(group.clients) >= group.maxSize {
-		return &ProtocolError{
+		return &Error{
 			Code:    "GROUP_FULL",
 			Message: fmt.Sprintf("group %s is full", groupID),
 		}
@@ -355,7 +355,7 @@ func (s *Server) RemoveClientFromGroup(clientID, groupID string) error {
 	s.groupsMu.RUnlock()
 
 	if !exists {
-		return &ProtocolError{
+		return &Error{
 			Code:    ErrorCodeGroupNotFound,
 			Message: fmt.Sprintf("group %s not found", groupID),
 		}
@@ -384,7 +384,7 @@ func (s *Server) SendToGroup(groupID string, message Message) error {
 	s.groupsMu.RUnlock()
 
 	if !exists {
-		return &ProtocolError{
+		return &Error{
 			Code:    ErrorCodeGroupNotFound,
 			Message: fmt.Sprintf("group %s not found", groupID),
 		}

@@ -10,22 +10,26 @@ import (
 // Универсальный и расширяемый для любых типов игр
 type Protocol interface {
 	// Lifecycle
+
 	Start(ctx context.Context, config Config) error
 	Stop(ctx context.Context) error
 	IsRunning() bool
 
 	// Client management
+
 	OnClientConnect(handler ClientConnectHandler)
 	OnClientDisconnect(handler ClientDisconnectHandler)
 	OnMessage(handler MessageHandler)
 
 	// Messaging
+
 	SendToClient(clientID string, message Message) error
 	SendToClients(clientIDs []string, message Message) error
 	Broadcast(message Message) error
 	BroadcastExcept(excludeClientIDs []string, message Message) error
 
 	// Groups/Rooms - важно для игр
+
 	CreateGroup(groupID string) error
 	DeleteGroup(groupID string) error
 	AddClientToGroup(clientID, groupID string) error
@@ -34,22 +38,26 @@ type Protocol interface {
 	GetGroupClients(groupID string) []string
 
 	// Metrics and monitoring
+
 	GetMetrics() Metrics
 	GetClients() []ClientInfo
 
 	// Configuration
+
 	GetConfig() Config
 }
 
 // Transport - абстракция транспортного уровня
 type Transport interface {
 	// Network operations
+
 	Listen(address string) error
 	Accept() (Connection, error)
 	Dial(address string) (Connection, error)
 	Close() error
 
 	// Properties
+
 	Type() TransportType
 	LocalAddr() net.Addr
 	IsListening() bool
@@ -58,50 +66,59 @@ type Transport interface {
 // Connection - абстракция соединения
 type Connection interface {
 	// Identity
+
 	ID() string
 	RemoteAddr() net.Addr
 	LocalAddr() net.Addr
 
 	// Data transfer
+
 	Send(data []byte) error
 	Receive() ([]byte, error)
 	SendMessage(message Message) error
 	ReceiveMessage() (Message, error)
 
 	// State
+
 	IsAlive() bool
 	IsClosed() bool
 	LastActivity() time.Time
 	Close() error
 
 	// Configuration
+
 	SetReadTimeout(timeout time.Duration)
 	SetWriteTimeout(timeout time.Duration)
 	SetKeepAlive(enabled bool)
 
 	// Metadata
-	GetMetadata(key string) (interface{}, bool)
-	SetMetadata(key string, value interface{})
+
+	GetMetadata(key string) (any, bool)
+	SetMetadata(key string, value any)
 }
 
 // Message - универсальный и��терфейс сообщения
 type Message interface {
 	// Core properties
+
 	ID() string
 	Type() string
 	Payload() []byte
 	Timestamp() time.Time
 
 	// Headers for routing and metadata
+
 	GetHeader(key string) string
 	SetHeader(key, value string)
 	Headers() map[string]string
 
 	// Serialization
+
 	Marshal() ([]byte, error)
 	Unmarshal(data []byte) error
 
 	// Utility
+
 	Size() int
 	Clone() Message
 }
@@ -123,6 +140,7 @@ type Middleware interface {
 }
 
 // Handler types
+
 type ClientConnectHandler func(ctx context.Context, client ClientInfo) error
 type ClientDisconnectHandler func(ctx context.Context, client ClientInfo, reason string) error
 type MessageHandler func(ctx context.Context, client ClientInfo, message Message) error
@@ -242,23 +260,28 @@ type Metrics struct {
 // MessageType - предопределенные типы сообщений для удобства
 const (
 	// System messages
+
 	MessageTypeHeartbeat  = "heartbeat"
 	MessageTypeAuth       = "auth"
+	MessageTypeConnect    = "connect"
 	MessageTypeDisconnect = "disconnect"
 	MessageTypeError      = "error"
 
 	// Group management
+
 	MessageTypeJoinGroup   = "join_group"
 	MessageTypeLeaveGroup  = "leave_group"
 	MessageTypeGroupUpdate = "group_update"
 
 	// Game messages (examples)
+
 	MessageTypePlayerMove   = "player_move"
 	MessageTypePlayerAction = "player_action"
 	MessageTypeGameState    = "game_state"
 	MessageTypeChat         = "chat"
 
 	// Custom messages start from this prefix
+
 	MessageTypeCustomPrefix = "custom_"
 )
 
@@ -282,13 +305,14 @@ const (
 )
 
 // Error types
-type ProtocolError struct {
+
+type Error struct {
 	Code    string
 	Message string
 	Cause   error
 }
 
-func (e *ProtocolError) Error() string {
+func (e *Error) Error() string {
 	if e.Cause != nil {
 		return e.Message + ": " + e.Cause.Error()
 	}
