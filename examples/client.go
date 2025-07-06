@@ -51,7 +51,5 @@ func main() {
 		return nil
 	})
 
-	c.On
-
 	time.Sleep(time.Second * 10)
 }

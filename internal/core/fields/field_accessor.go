@@ -10,7 +10,7 @@ import (
 )
 
 // maxRetries is the maximum number of retries for transactional operations.
-const maxRetries = 25
+const maxRetries = 10
 
 var _ FieldAccessor[any] = (*FA[any])(nil)
 
@@ -63,8 +63,8 @@ func NewFA[T any](initial ...T) *FA[T] {
 
 // Get returns the current value stored in the field accessor.
 // This operation is atomic and thread-safe.
-func (f *FA[T]) Get() T {
-	val := f.value.Load()
+func (a *FA[T]) Get() T {
+	val := a.value.Load()
 	if val == nil {
 		var zero T
 		return zero
@@ -74,46 +74,46 @@ func (f *FA[T]) Get() T {
 
 // Set updates the value stored in the field accessor and notifies all subscribers.
 // This operation is atomic and thread-safe.
-func (f *FA[T]) Set(value T) {
-	f.value.Store(value)
-	version := f.version.Add(1)
-	f.addToHistory(value, version)
-	f.notifySubscribers(value)
+func (a *FA[T]) Set(value T) {
+	a.value.Store(value)
+	version := a.version.Add(1)
+	a.addToHistory(value, version)
+	a.notifySubscribers(value)
 }
 
 // Lock acquires an exclusive lock on the field accessor.
 // Use this when you need to perform multiple operations atomically.
-func (f *FA[T]) Lock() {
-	f.mx.Lock()
+func (a *FA[T]) Lock() {
+	a.mx.Lock()
 }
 
 // Unlock releases the exclusive lock on the field accessor.
-func (f *FA[T]) Unlock() {
-	f.mx.Unlock()
+func (a *FA[T]) Unlock() {
+	a.mx.Unlock()
 }
 
 // RLock acquires a shared (read) lock on the field accessor.
 // Multiple readers can hold the lock simultaneously.
-func (f *FA[T]) RLock() {
-	f.mx.RLock()
+func (a *FA[T]) RLock() {
+	a.mx.RLock()
 }
 
 // RUnlock releases the shared (read) lock on the field accessor.
-func (f *FA[T]) RUnlock() {
-	f.mx.RUnlock()
+func (a *FA[T]) RUnlock() {
+	a.mx.RUnlock()
 }
 
 // TryLock attempts to acquire an exclusive lock within the specified timeout.
 // Returns true if the lock was acquired, false if the timeout was reached.
-func (f *FA[T]) TryLock(timeout time.Duration) bool {
+func (a *FA[T]) TryLock(timeout time.Duration) bool {
 	done := make(chan bool, 1)
 
 	go func() {
-		f.mx.Lock()
+		a.mx.Lock()
 		select {
 		case done <- true:
 		default:
-			f.mx.Unlock()
+			a.mx.Unlock()
 		}
 	}()
 
@@ -127,50 +127,50 @@ func (f *FA[T]) TryLock(timeout time.Duration) bool {
 
 // Subscribe registers a callback function that will be called whenever the value changes.
 // Returns an unsubscribe function that can be called to remove the subscription.
-func (f *FA[T]) Subscribe(onUpdate func(newValue T)) (unsubscribe func()) {
-	f.subsMx.Lock()
-	defer f.subsMx.Unlock()
+func (a *FA[T]) Subscribe(onUpdate func(newValue T)) (unsubscribe func()) {
+	a.subsMx.Lock()
+	defer a.subsMx.Unlock()
 
-	id := generateUniqueID(&f.subsID)
-	f.subscribers[id] = onUpdate
+	id := generateUniqueID(&a.subsID)
+	a.subscribers[id] = onUpdate
 
 	return func() {
-		f.subsMx.Lock()
-		defer f.subsMx.Unlock()
-		delete(f.subscribers, id)
+		a.subsMx.Lock()
+		defer a.subsMx.Unlock()
+		delete(a.subscribers, id)
 	}
 }
 
 // SubscribeIf registers a conditional callback function that will be called only when
 // the value changes and the filter function returns true.
 // Returns an unsubscribe function that can be called to remove the subscription.
-func (f *FA[T]) SubscribeIf(onUpdate func(newValue T), filter func(T) bool) (unsubscribe func()) {
-	f.subsMx.Lock()
-	defer f.subsMx.Unlock()
+func (a *FA[T]) SubscribeIf(onUpdate func(newValue T), filter func(T) bool) (unsubscribe func()) {
+	a.subsMx.Lock()
+	defer a.subsMx.Unlock()
 
-	id := generateUniqueID(&f.subsID)
-	f.subscribers[id] = func(val T) {
+	id := generateUniqueID(&a.subsID)
+	a.subscribers[id] = func(val T) {
 		if filter == nil || filter(val) {
 			onUpdate(val)
 		}
 	}
 
 	return func() {
-		f.subsMx.Lock()
-		defer f.subsMx.Unlock()
-		delete(f.subscribers, id)
+		a.subsMx.Lock()
+		defer a.subsMx.Unlock()
+		delete(a.subscribers, id)
 	}
 }
 
 // SubscribeCh returns a channel that receives value updates and an unsubscribe function.
 // The channel is buffered to prevent blocking on slow consumers.
-func (f *FA[T]) SubscribeCh() (ch <-chan T, unsubscribe func()) {
-	return f.SubscribeIfCh(nil)
+func (a *FA[T]) SubscribeCh() (ch <-chan T, unsubscribe func()) {
+	return a.SubscribeIfCh(nil)
 }
 
 // SubscribeIfCh returns a channel that receives filtered value updates and an unsubscribe function.
 // Only values that pass the filter function (if provided) are sent to the channel.
-func (f *FA[T]) SubscribeIfCh(filter func(T) bool) (ch <-chan T, unsubscribe func()) {
+func (a *FA[T]) SubscribeIfCh(filter func(T) bool) (ch <-chan T, unsubscribe func()) {
 	outCh := make(chan T, 10)
 	cancelCh := make(chan struct{})
 
@@ -178,7 +178,7 @@ func (f *FA[T]) SubscribeIfCh(filter func(T) bool) (ch <-chan T, unsubscribe fun
 		defer close(outCh)
 
 		// Send current value if it passes the filter
-		if current := f.Get(); filter == nil || filter(current) {
+		if current := a.Get(); filter == nil || filter(current) {
 			select {
 			case outCh <- current:
 			case <-cancelCh:
@@ -187,7 +187,7 @@ func (f *FA[T]) SubscribeIfCh(filter func(T) bool) (ch <-chan T, unsubscribe fun
 		}
 
 		// Subscribe to future updates
-		unsub := f.SubscribeIf(func(val T) {
+		unsub := a.SubscribeIf(func(val T) {
 			select {
 			case outCh <- val:
 			case <-cancelCh:
@@ -206,22 +206,22 @@ func (f *FA[T]) SubscribeIfCh(filter func(T) bool) (ch <-chan T, unsubscribe fun
 // CompareAndSwap atomically compares the current value with expected and,
 // if they are equal, swaps the current value with new.
 // Returns true if the swap was performed.
-func (f *FA[T]) CompareAndSwap(expected T, new T) bool {
-	if f.value.CompareAndSwap(expected, new) {
-		version := f.version.Add(1)
-		f.addToHistory(new, version)
-		f.notifySubscribers(new)
+func (a *FA[T]) CompareAndSwap(expected T, new T) bool {
+	if a.value.CompareAndSwap(expected, new) {
+		version := a.version.Add(1)
+		a.addToHistory(new, version)
+		a.notifySubscribers(new)
 		return true
 	}
 	return false
 }
 
 // Swap atomically stores new as the new value and returns the previous value.
-func (f *FA[T]) Swap(new T) T {
-	old := f.value.Swap(new)
-	version := f.version.Add(1)
-	f.addToHistory(new, version)
-	f.notifySubscribers(new)
+func (a *FA[T]) Swap(new T) T {
+	old := a.value.Swap(new)
+	version := a.version.Add(1)
+	a.addToHistory(new, version)
+	a.notifySubscribers(new)
 
 	if old == nil {
 		var zero T
@@ -234,45 +234,45 @@ func (f *FA[T]) Swap(new T) T {
 // The update function receives the current value and should return the new value.
 // The operation is retried until it succeeds or a maximum number of attempts is reached.
 // Default retries are set to 25.
-func (f *FA[T]) Transaction(update func(current T) T) (final T) {
+func (a *FA[T]) Transaction(update func(current T) T) (final T) {
 	for i := 0; i < maxRetries; i++ {
-		current := f.Get()
+		current := a.Get()
 		updated := update(current)
-		if f.CompareAndSwap(current, updated) {
+		if a.CompareAndSwap(current, updated) {
 			return updated
 		}
 		// Small backoff to reduce contention
-		if i > 10 {
+		if i > 5 {
 			time.Sleep(time.Microsecond * time.Duration(i))
 		}
 	}
 
 	// Fallback: return current value if transaction fails
-	return f.Get()
+	return a.Get()
 }
 
 // Version returns the current version number of the field.
 // The version is incremented each time the value changes.
-func (f *FA[T]) Version() uint64 {
-	return f.version.Load()
+func (a *FA[T]) Version() uint64 {
+	return a.version.Load()
 }
 
 // ChangedSince returns true if the field has been modified since the specified version.
-func (f *FA[T]) ChangedSince(version uint64) bool {
-	return f.version.Load() > version
+func (a *FA[T]) ChangedSince(version uint64) bool {
+	return a.version.Load() > version
 }
 
 // Merge combines the current value with another field accessor's value using the provided merge function.
 // The operation is performed atomically using compare-and-swap.
-func (f *FA[T]) Merge(other FieldAccessor[T], mergeFn func(current T, other T) T) {
+func (a *FA[T]) Merge(other FieldAccessor[T], mergeFn func(current T, other T) T) {
 	const maxRetries = 100
 
 	for i := 0; i < maxRetries; i++ {
-		current := f.Get()
+		current := a.Get()
 		otherValue := other.Get()
 		merged := mergeFn(current, otherValue)
 
-		if f.CompareAndSwap(current, merged) {
+		if a.CompareAndSwap(current, merged) {
 			return
 		}
 
@@ -285,21 +285,21 @@ func (f *FA[T]) Merge(other FieldAccessor[T], mergeFn func(current T, other T) T
 
 // History returns the last 'limit' values stored in the field accessor.
 // The values are returned in chronological order (oldest first).
-func (f *FA[T]) History(limit uint16) []T {
-	f.historyMx.RLock()
-	defer f.historyMx.RUnlock()
+func (a *FA[T]) History(limit uint16) []T {
+	a.historyMx.RLock()
+	defer a.historyMx.RUnlock()
 
-	if limit == 0 || len(f.history) == 0 {
+	if limit == 0 || len(a.history) == 0 {
 		return []T{}
 	}
 
 	start := 0
-	if int(limit) < len(f.history) {
-		start = len(f.history) - int(limit)
+	if int(limit) < len(a.history) {
+		start = len(a.history) - int(limit)
 	}
 
-	result := make([]T, len(f.history)-start)
-	for i, entry := range f.history[start:] {
+	result := make([]T, len(a.history)-start)
+	for i, entry := range a.history[start:] {
 		result[i] = entry.value
 	}
 
@@ -308,14 +308,14 @@ func (f *FA[T]) History(limit uint16) []T {
 
 // Delta returns all values that have been set since the specified version.
 // Returns an error if the requested version is too old and no longer in history.
-func (f *FA[T]) Delta(fromVersion uint64) ([]T, error) {
-	f.historyMx.RLock()
-	defer f.historyMx.RUnlock()
+func (a *FA[T]) Delta(fromVersion uint64) ([]T, error) {
+	a.historyMx.RLock()
+	defer a.historyMx.RUnlock()
 
 	var result []T
 	found := false
 
-	for _, entry := range f.history {
+	for _, entry := range a.history {
 		if entry.version > fromVersion {
 			if !found {
 				found = true
@@ -324,7 +324,7 @@ func (f *FA[T]) Delta(fromVersion uint64) ([]T, error) {
 		}
 	}
 
-	if !found && fromVersion < f.version.Load() {
+	if !found && fromVersion < a.version.Load() {
 		return nil, errors.New("version too old, not available in history")
 	}
 
@@ -333,54 +333,54 @@ func (f *FA[T]) Delta(fromVersion uint64) ([]T, error) {
 
 // GetWithContext returns the current value with context support.
 // The context can be used for cancellation or timeout.
-func (f *FA[T]) GetWithContext(ctx context.Context) (T, error) {
+func (a *FA[T]) GetWithContext(ctx context.Context) (T, error) {
 	select {
 	case <-ctx.Done():
 		var zero T
 		return zero, ctx.Err()
 	default:
-		return f.Get(), nil
+		return a.Get(), nil
 	}
 }
 
 // SetWithContext sets a new value with context support.
 // The context can be used for cancellation or timeout.
-func (f *FA[T]) SetWithContext(ctx context.Context, value T) error {
+func (a *FA[T]) SetWithContext(ctx context.Context, value T) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		f.Set(value)
+		a.Set(value)
 		return nil
 	}
 }
 
 // Serialize converts the current value to JSON bytes.
-func (f *FA[T]) Serialize() ([]byte, error) {
-	return json.Marshal(f.Get())
+func (a *FA[T]) Serialize() ([]byte, error) {
+	return json.Marshal(a.Get())
 }
 
 // Deserialize updates the field value from JSON bytes.
-func (f *FA[T]) Deserialize(bytes []byte) error {
+func (a *FA[T]) Deserialize(bytes []byte) error {
 	var newValue T
 	if err := json.Unmarshal(bytes, &newValue); err != nil {
 		return err
 	}
-	f.Set(newValue)
+	a.Set(newValue)
 	return nil
 }
 
 // Clone creates a new field accessor with the same current value.
 // The clone does not share subscribers or history with the original.
-func (f *FA[T]) Clone() FieldAccessor[T] {
-	return NewFA[T](f.Get())
+func (a *FA[T]) Clone() FieldAccessor[T] {
+	return NewFA[T](a.Get())
 }
 
 // addToHistory adds a new entry to the value history.
 // This method should be called while holding appropriate locks.
-func (f *FA[T]) addToHistory(value T, version uint64) {
-	f.historyMx.Lock()
-	defer f.historyMx.Unlock()
+func (a *FA[T]) addToHistory(value T, version uint64) {
+	a.historyMx.Lock()
+	defer a.historyMx.Unlock()
 
 	entry := historyEntry[T]{
 		value:   value,
@@ -388,30 +388,30 @@ func (f *FA[T]) addToHistory(value T, version uint64) {
 		time:    time.Now(),
 	}
 
-	f.history = append(f.history, entry)
+	a.history = append(a.history, entry)
 
 	// Trim history if it exceeds maximum size
-	if len(f.history) > int(f.maxHistory) {
-		copy(f.history, f.history[1:])
-		f.history = f.history[:f.maxHistory]
+	if len(a.history) > int(a.maxHistory) {
+		copy(a.history, a.history[1:])
+		a.history = a.history[:a.maxHistory]
 	}
 }
 
 // notifySubscribers notifies all registered subscribers about a value change.
 // Notifications are sent asynchronously to prevent blocking the setter.
-func (f *FA[T]) notifySubscribers(value T) {
-	f.subsMx.RLock()
-	if len(f.subscribers) == 0 {
-		f.subsMx.RUnlock()
+func (a *FA[T]) notifySubscribers(value T) {
+	a.subsMx.RLock()
+	if len(a.subscribers) == 0 {
+		a.subsMx.RUnlock()
 		return
 	}
 
 	// Create a snapshot of subscribers to avoid holding the lock during notifications
-	subscribers := make([]func(T), 0, len(f.subscribers))
-	for _, sub := range f.subscribers {
+	subscribers := make([]func(T), 0, len(a.subscribers))
+	for _, sub := range a.subscribers {
 		subscribers = append(subscribers, sub)
 	}
-	f.subsMx.RUnlock()
+	a.subsMx.RUnlock()
 
 	// Notify subscribers asynchronously
 	go func() {

@@ -2,12 +2,16 @@ package fields
 
 import (
 	"context"
-	"go/types"
 	"time"
 
 	"github.com/zeusync/zeusync/pkg/encoding"
 	"github.com/zeusync/zeusync/pkg/sequence"
 )
+
+// Numeric is an interface that represents any numeric type. It is used to define
+type Numeric interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~float32 | ~float64
+}
 
 // FieldAccessor provides thread-safe access to a field value with comprehensive functionality
 // including atomic operations, versioning, event subscriptions, and serialization support.
@@ -123,17 +127,19 @@ type FieldAccessor[T any] interface {
 	Clone() FieldAccessor[T]
 }
 
-// NFA is a type alias for NumberFieldAccessor[T] providing a shorter name
-// for numeric field accessor types.
-type NFA[T any] NumberFieldAccessor[T]
-
-// NumberFieldAccessor extends FieldAccessor with mathematical operations
+// NumericFieldAccessor extends FieldAccessor with mathematical operations
 // for numeric types. It provides thread-safe arithmetic operations that
 // automatically handle value updates and subscriber notifications.
-type NumberFieldAccessor[T any] interface {
+type NumericFieldAccessor[T Numeric] interface {
 	FieldAccessor[T]
 
 	// Mathematical operation methods
+
+	// Increment atomically increments the current field value by one.
+	Increment()
+
+	// Decrement atomically decrements the current field value by one.
+	Decrement()
 
 	// Add atomically adds the given value to the current field value.
 	// The operation is thread-safe and notifies subscribers of the change.
@@ -151,31 +157,19 @@ type NumberFieldAccessor[T any] interface {
 	// The operation is thread-safe and notifies subscribers of the change.
 	// Note: Division by zero behavior depends on the underlying numeric type.
 	Div(value T)
-
-	// Mod atomically computes the modulo of the current field value with the given value.
-	// The operation is thread-safe and notifies subscribers of the change.
-	Mod(value T)
-
-	// Pow atomically raises the current field value to the power of the given value.
-	// The operation is thread-safe and notifies subscribers of the change.
-	Pow(value T)
 }
 
-// ArrayFA is a type alias for ArrayFieldAccessor[T] providing a shorter name
-// for array field accessor types.
-type ArrayFA[T any] ArrayFieldAccessor[T]
-
-// ArrayFieldAccessor extends FieldAccessor with array-specific operations.
+// SliceFieldAccessor extends FieldAccessor with slice-specific operations.
 // It provides thread-safe array manipulation methods that automatically
 // handle value updates and subscriber notifications.
-type ArrayFieldAccessor[T any] interface {
-	FieldAccessor[T]
+type SliceFieldAccessor[T any, S ~[]T] interface {
+	FieldAccessor[S]
 
 	// Array manipulation methods
 
 	// Index returns the element at the specified index.
 	// Panics if the index is out of bounds.
-	Index(index int) T
+	Index(index int) (T, bool)
 
 	// Append adds one or more elements to the end of the array.
 	// The operation is thread-safe and notifies subscribers of the change.
@@ -184,7 +178,7 @@ type ArrayFieldAccessor[T any] interface {
 	// Remove removes the element at the specified index.
 	// The operation is thread-safe and notifies subscribers of the change.
 	// Panics if the index is out of bounds.
-	Remove(index int)
+	Remove(index int) bool
 
 	// Insert inserts a value at the specified index, shifting existing elements.
 	// The operation is thread-safe and notifies subscribers of the change.
@@ -203,26 +197,22 @@ type ArrayFieldAccessor[T any] interface {
 	// If the new size is larger, zero values are appended.
 	// If smaller, elements are truncated.
 	// The operation is thread-safe and notifies subscribers of the change.
-	Resize(newLen int)
+	Resize(newLen int) bool
 
 	// CopyTo copies array elements to the provided destination slice.
 	// Returns the number of elements copied.
 	// This operation is thread-safe.
-	CopyTo(dest []T) int
+	CopyTo(dest S) int
 
 	// Reverse returns a new array with elements in reverse order.
 	// The original array is not modified.
 	// This operation is thread-safe.
-	Reverse() []T
+	Reverse() S
 
 	// Iter returns an iterator for traversing array elements.
 	// The iterator provides thread-safe access to array elements.
-	Iter() sequence.Iterator[T]
+	Iter() *sequence.Iterator[T]
 }
-
-// ComFA is a type alias for ComparableFieldAccessor[T] providing a shorter name
-// for comparable field accessor types.
-type ComFA[T any] ComparableFieldAccessor[T]
 
 // ComparableFieldAccessor extends FieldAccessor with comparison operations
 // for types that support ordering. It provides thread-safe comparison methods
@@ -268,5 +258,5 @@ type ConvertibleFieldAccessor[T any] interface {
 	// ToType converts the current field value to the specified Go type.
 	// Returns the converted value and an error if the conversion is not possible.
 	// The conversion is performed atomically and is thread-safe.
-	ToType(t types.Type) (any, error)
+	ToType(t Type) (any, error)
 }
