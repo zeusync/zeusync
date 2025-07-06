@@ -2,54 +2,56 @@ package main
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol"
-	"github.com/zeusync/zeusync/sdk/go/client"
+	"log"
 	"time"
+
+	"zeusync/internal/core/protocol"
 )
 
 func main() {
-	logger := log.New(log.LevelDebug)
+	// 1. Create a QUIC transport.
+	transport := protocol.NewQuicTransport()
 
-	cfg := client.ClientConfig{
-		ServerAddress:     "localhost:8989",
-		Transport:         protocol.TransportQUIC,
-		ConnectTimeout:    time.Second * 5,
-		ReadTimeout:       time.Second * 5,
-		WriteTimeout:      time.Second * 5,
-		EnableReconnect:   true,
-		ReconnectInterval: time.Second * 5,
-		MaxReconnectTries: 5,
-		EnableHeartbeat:   true,
-		HeartbeatInterval: time.Second * 10,
+	// 2. Dial the server.
+	addr := "localhost:8080"
+	conn, err := transport.Dial(context.Background(), addr)
+	if err != nil {
+		log.Fatalf("Failed to dial server: %v", err)
 	}
 
-	c := client.NewClient(cfg)
-	defer func() {
-		_ = c.Disconnect()
+	// 3. Create a codec and a client.
+	codec := &protocol.JSONCodec{}
+	client := protocol.NewDefaultClient("my-client", conn, codec)
+	log.Printf("Connected to server as %s", client.ID())
+
+	// 4. Start a goroutine to listen for incoming messages.
+	go func() {
+		for {
+			msg, err := client.Receive(client.Context())
+			if err != nil {
+				log.Printf("Failed to receive message: %v", err)
+				return
+			}
+
+			switch msg.Type() {
+			case "echo_response":
+				log.Printf("Received echo: %s", string(msg.Payload()))
+			case "world_update":
+				log.Printf("Received world update: %s", string(msg.Payload()))
+			default:
+				log.Printf("Received unknown message type: %s", msg.Type())
+			}
+		}
 	}()
 
-	c.OnConnect(func() {
-		logger.Info("Connected to server")
-	})
-
-	c.OnDisconnect(func(reason string) {
-		logger.Info("Disconnected from server", log.String("reason", reason))
-	})
-
-	if err := c.Connect(); err != nil {
-		logger.Error("Failed to connect to server", log.Error(err))
-		return
+	// 5. Send a message to the server every 2 seconds.
+	for {
+		time.Sleep(2 * time.Second)
+		msg := protocol.NewMessage("ping", []byte("Hello from client!"))
+		if err := client.Send(msg); err != nil {
+			log.Printf("Failed to send message: %v", err)
+		} else {
+			log.Printf("Sent message: %s", string(msg.Payload()))
+		}
 	}
-
-	if err := c.Send(protocol.MessageTypePlayerAction, []byte("move forward")); err != nil {
-		logger.Error("Failed to send message", log.Error(err))
-	}
-
-	c.OnMessage(protocol.MessageTypeGameState, func(ctx context.Context, message protocol.Message) error {
-		logger.Info("Received message", log.String("data", string(message.Payload())))
-		return nil
-	})
-
-	time.Sleep(time.Second * 10)
 }
