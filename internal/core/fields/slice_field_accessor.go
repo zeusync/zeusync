@@ -12,6 +12,12 @@ type SFA[T any] struct {
 	root *FA[[]T]
 }
 
+func NewSFA[T any](initial ...[]T) *SFA[T] {
+	return &SFA[T]{
+		root: NewFA[[]T](initial...),
+	}
+}
+
 func (a *SFA[T]) Get() []T {
 	return a.root.Get()
 }
@@ -115,6 +121,19 @@ func (a *SFA[T]) Index(index int) (T, bool) {
 		return zero, false
 	}
 	return slice[index], true
+}
+
+func (a *SFA[T]) Assign(index int, value T) bool {
+	if len(a.root.Get())-1 < index || index < 0 {
+		return false
+	}
+
+	a.root.Transaction(func(current []T) []T {
+		current[index] = value
+		return current
+	})
+
+	return true
 }
 
 func (a *SFA[T]) Append(values ...T) {

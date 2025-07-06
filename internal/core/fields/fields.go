@@ -168,8 +168,11 @@ type SliceFieldAccessor[T any, S ~[]T] interface {
 	// Array manipulation methods
 
 	// Index returns the element at the specified index.
-	// Panics if the index is out of bounds.
+	// Returns false if the index is out of bounds.
 	Index(index int) (T, bool)
+
+	// Assign assigns a value to the element at the specified index.
+	Assign(index int, value T) bool
 
 	// Append adds one or more elements to the end of the array.
 	// The operation is thread-safe and notifies subscribers of the change.
@@ -177,12 +180,12 @@ type SliceFieldAccessor[T any, S ~[]T] interface {
 
 	// Remove removes the element at the specified index.
 	// The operation is thread-safe and notifies subscribers of the change.
-	// Panics if the index is out of bounds.
+	// Returns false if the index is out of bounds.
 	Remove(index int) bool
 
 	// Insert inserts a value at the specified index, shifting existing elements.
 	// The operation is thread-safe and notifies subscribers of the change.
-	// Panics if the index is out of bounds.
+	// Returns false if the index is out of bounds.
 	Insert(index int, value T)
 
 	// Len returns the current length of the array.

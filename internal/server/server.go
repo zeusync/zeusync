@@ -79,7 +79,7 @@ func NewServer(globalCtx context.Context) *Server {
 		}
 	})
 
-	metricsField.Subscribe(func(metrics protocol.Metrics) {
+	/*metricsField.Subscribe(func(metrics protocol.Metrics) {
 		logger.Info("Metrics updated",
 			log.Int64("active_connections", metrics.ActiveConnections),
 			log.Int64("total_connections", metrics.TotalConnections),
@@ -99,7 +99,7 @@ func NewServer(globalCtx context.Context) *Server {
 			log.Int64("active_groups", metrics.ActiveGroups),
 			log.Int64("total_groups", metrics.TotalGroups),
 		)
-	})
+	})*/
 
 	server.OnClientConnect(func(ctx context.Context, client protocol.ClientInfo) error {
 		connectField.Transaction(func(current int) int {
