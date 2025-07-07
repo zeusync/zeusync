@@ -54,6 +54,9 @@ func New(level Level) *Logger {
 }
 
 func Provide() *Logger {
+	if innerLogger == nil {
+		innerLogger = New(LevelInfo)
+	}
 	return innerLogger
 }
 

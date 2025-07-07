@@ -1,402 +1,691 @@
+// Package client provides a high-level QUIC client SDK for ZeuSync
 package client
 
 import (
 	"context"
-	"fmt"
+	"github.com/zeusync/zeusync/internal/core/observability/log"
+	"github.com/zeusync/zeusync/internal/core/protocol"
+	"github.com/zeusync/zeusync/internal/core/protocol/quic"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/zeusync/zeusync/internal/core/protocol"
 )
 
-// Client - SDK клиент для подключения к ZeuSync серверу
+// Client represents a ZeuSync client connection
 type Client struct {
+	// Connection management
 	conn      protocol.Connection
-	transport protocol.Transport
-	config    ClientConfig
+	transport *quic.Transport
 
-	// Message handling
-	messageHandlers map[string]MessageHandler
-	handlersMu      sync.RWMutex
-	defaultHandler  MessageHandler
+	// Client state
+	id       protocol.ClientID
+	groups   sync.Map // map[protocol.GroupID]bool
+	scopes   sync.Map // map[protocol.ScopeID]bool
+	metadata sync.Map // map[string]interface{}
 
-	// State
-	connected int32
-	ctx       context.Context
-	cancel    context.CancelFunc
+	// Event handlers
+	messageHandlers map[protocol.MessageType][]MessageHandler
+	eventHandlers   map[EventType][]EventHandler
+	handlerMutex    sync.RWMutex
 
-	// Metrics
-	metrics ClientMetrics
+	// Lifecycle
+	connected int32 // atomic bool
+	closed    int32 // atomic bool
+	done      chan struct{}
 
-	// Events
-	onConnect    func()
-	onDisconnect func(reason string)
-	onError      func(error)
+	// Configuration and logging
+	config Config
+	logger log.Log
+
+	// Background workers
+	workerGroup sync.WaitGroup
 }
 
-// ClientConfig - конфигурация клиента
-type ClientConfig struct {
-	// Connection
-	ServerAddress string
-	Transport     protocol.TransportType
+// Config holds configuration for the client
+type Config struct {
+	// Connection settings
+	ServerAddr           string
+	ConnectTimeout       time.Duration
+	ReconnectInterval    time.Duration
+	MaxReconnectAttempts int
 
-	// Timeouts
-	ConnectTimeout time.Duration
-	ReadTimeout    time.Duration
-	WriteTimeout   time.Duration
+	// Message settings
+	MessageTimeout    time.Duration
+	MaxMessageSize    int
+	MessageBufferSize int
 
-	// Reconnection
-	EnableReconnect   bool
-	ReconnectInterval time.Duration
-	MaxReconnectTries int
+	// Health monitoring
+	HeartbeatInterval  time.Duration
+	HealthCheckTimeout time.Duration
 
-	// Features
-	EnableHeartbeat   bool
-	HeartbeatInterval time.Duration
+	// Logging
+	LogLevel log.Level
 
 	// Custom options
-	Metadata map[string]interface{}
+	CustomOptions map[string]interface{}
 }
 
-// MessageHandler - обработчик сообщений
-type MessageHandler func(ctx context.Context, message protocol.Message) error
-
-// ClientMetrics - метрики клиента
-type ClientMetrics struct {
-	ConnectedAt      time.Time
-	LastActivity     time.Time
-	MessagesSent     int64
-	MessagesReceived int64
-	BytesSent        int64
-	BytesReceived    int64
-	ReconnectCount   int64
-	ErrorCount       int64
+// DefaultClientConfig returns default client configuration
+func DefaultClientConfig() Config {
+	return Config{
+		ServerAddr:           "localhost:8080",
+		ConnectTimeout:       30 * time.Second,
+		ReconnectInterval:    5 * time.Second,
+		MaxReconnectAttempts: 10,
+		MessageTimeout:       10 * time.Second,
+		MaxMessageSize:       1024 * 1024, // 1MB
+		MessageBufferSize:    1000,
+		HeartbeatInterval:    30 * time.Second,
+		HealthCheckTimeout:   5 * time.Second,
+		LogLevel:             log.LevelInfo,
+		CustomOptions:        make(map[string]interface{}),
+	}
 }
 
-// NewClient создает новый клиент
-func NewClient(config ClientConfig) *Client {
-	ctx, cancel := context.WithCancel(context.Background())
+// MessageHandler defines a function type for handling incoming messages
+type MessageHandler func(msg *protocol.Message) error
 
-	var transport protocol.Transport
-	switch config.Transport {
-	case protocol.TransportQUIC:
-		transport = protocol.NewQUICTransport()
-	default:
-		transport = protocol.NewQUICTransport() // По умолчанию QUIC
+// EventHandler defines a function type for handling client events
+type EventHandler func(event Event) error
+
+// EventType represents different types of client events
+type EventType string
+
+const (
+	EventTypeConnected    EventType = "connected"
+	EventTypeDisconnected EventType = "disconnected"
+	EventTypeReconnecting EventType = "reconnecting"
+	EventTypeError        EventType = "error"
+	EventTypeJoinedGroup  EventType = "joined_group"
+	EventTypeLeftGroup    EventType = "left_group"
+	EventTypeJoinedScope  EventType = "joined_scope"
+	EventTypeLeftScope    EventType = "left_scope"
+)
+
+// Event represents a client event
+type Event struct {
+	Type      EventType
+	Timestamp time.Time
+	Data      map[string]interface{}
+	Error     error
+}
+
+// NewClient creates a new ZeuSync client
+func NewClient(config Config) *Client {
+	if config.CustomOptions == nil {
+		config.CustomOptions = make(map[string]interface{})
 	}
 
-	return &Client{
-		transport:       transport,
+	logger := log.New(config.LogLevel)
+
+	client := &Client{
+		id:              protocol.GenerateClientID(),
+		messageHandlers: make(map[protocol.MessageType][]MessageHandler),
+		eventHandlers:   make(map[EventType][]EventHandler),
+		done:            make(chan struct{}),
 		config:          config,
-		messageHandlers: make(map[string]MessageHandler),
-		ctx:             ctx,
-		cancel:          cancel,
+		logger:          logger.With(log.String("component", "client")),
 	}
+
+	client.logger.Info("Client created", log.String("client_id", string(client.id)))
+
+	return client
 }
 
-// Connect подключается к с��рверу
-func (c *Client) Connect() error {
-	if !atomic.CompareAndSwapInt32(&c.connected, 0, 1) {
-		return fmt.Errorf("client already connected")
+// Connect establishes connection to the ZeuSync server
+func (c *Client) Connect(ctx context.Context) error {
+	if atomic.LoadInt32(&c.closed) == 1 {
+		return ErrClientClosed
 	}
 
-	conn, err := c.transport.Dial(c.config.ServerAddress)
+	if atomic.LoadInt32(&c.connected) == 1 {
+		return ErrAlreadyConnected
+	}
+
+	c.logger.Info("Connecting to server", log.String("addr", c.config.ServerAddr))
+
+	// Create QUIC transport
+	globalConfig := protocol.DefaultGlobalConfig()
+	globalConfig.MaxMessageSize = c.config.MaxMessageSize
+	globalConfig.MessageBufferSize = c.config.MessageBufferSize
+
+	c.transport = quic.NewQUICTransport(nil, globalConfig, c.logger)
+
+	// Connect with timeout
+	connectCtx, cancel := context.WithTimeout(ctx, c.config.ConnectTimeout)
+	defer cancel()
+
+	conn, err := c.transport.Dial(connectCtx, c.config.ServerAddr)
 	if err != nil {
-		atomic.StoreInt32(&c.connected, 0)
-		return fmt.Errorf("failed to connect to %s: %w", c.config.ServerAddress, err)
+		c.logger.Error("Failed to connect to server",
+			log.String("addr", c.config.ServerAddr),
+			log.Error(err))
+		return err
 	}
 
 	c.conn = conn
-	c.metrics.ConnectedAt = time.Now()
-	c.metrics.LastActivity = time.Now()
+	atomic.StoreInt32(&c.connected, 1)
 
-	// Настраиваем таймауты
-	if c.config.ReadTimeout > 0 {
-		conn.SetReadTimeout(c.config.ReadTimeout)
-	}
-	if c.config.WriteTimeout > 0 {
-		conn.SetWriteTimeout(c.config.WriteTimeout)
-	}
+	c.logger.Info("Connected to server",
+		log.String("local_addr", conn.LocalAddr().String()),
+		log.String("remote_addr", conn.RemoteAddr().String()))
 
-	// Запускаем обработку сообщений
-	go c.messageLoop()
+	// Start background workers
+	c.startWorkers()
 
-	// Запускаем heartbeat если включен
-	if c.config.EnableHeartbeat {
-		go c.heartbeatLoop()
-	}
-
-	// Вызываем callback
-	if c.onConnect != nil {
-		c.onConnect()
-	}
+	// Emit connected event
+	c.emitEvent(Event{
+		Type:      EventTypeConnected,
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"server_addr": c.config.ServerAddr,
+			"local_addr":  conn.LocalAddr().String(),
+			"remote_addr": conn.RemoteAddr().String(),
+		},
+	})
 
 	return nil
 }
 
-// Disconnect отключается от сервера
+// Disconnect closes the connection to the server
 func (c *Client) Disconnect() error {
 	if !atomic.CompareAndSwapInt32(&c.connected, 1, 0) {
-		return fmt.Errorf("client not connected")
+		return ErrNotConnected
 	}
 
-	c.cancel()
+	c.logger.Info("Disconnecting from server")
 
+	// Close connection
 	if c.conn != nil {
-		return c.conn.Close()
+		_ = c.conn.Close()
 	}
+
+	// Stop workers
+	c.stopWorkers()
+
+	// Emit disconnected event
+	c.emitEvent(Event{
+		Type:      EventTypeDisconnected,
+		Timestamp: time.Now(),
+	})
+
+	c.logger.Info("Disconnected from server")
 
 	return nil
 }
 
-// IsConnected проверяет, подключен ли клиент
-func (c *Client) IsConnected() bool {
-	return atomic.LoadInt32(&c.connected) == 1 && c.conn != nil && c.conn.IsAlive()
-}
-
-// Send отправляет сообщение серверу
-func (c *Client) Send(msgType string, payload []byte) error {
-	if !c.IsConnected() {
-		return fmt.Errorf("client not connected")
+// Close closes the client and releases all resources
+func (c *Client) Close() error {
+	if !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
+		return nil // Already closed
 	}
 
-	message := protocol.NewMessage(msgType, payload)
+	c.logger.Info("Closing client")
 
-	if err := c.conn.SendMessage(message); err != nil {
-		atomic.AddInt64(&c.metrics.ErrorCount, 1)
-		return fmt.Errorf("failed to send message: %w", err)
+	// Disconnect if connected
+	if atomic.LoadInt32(&c.connected) == 1 {
+		_ = c.Disconnect()
 	}
 
-	atomic.AddInt64(&c.metrics.MessagesSent, 1)
-	c.metrics.LastActivity = time.Now()
+	// Close transport
+	if c.transport != nil {
+		_ = c.transport.Close()
+	}
+
+	// Signal done
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+
+	c.logger.Info("Client closed")
 
 	return nil
 }
 
-// SendMessage отправляет готовое сообщение
-func (c *Client) SendMessage(message protocol.Message) error {
-	if !c.IsConnected() {
-		return fmt.Errorf("client not connected")
+// SendMessage sends a message to the server
+func (c *Client) SendMessage(msg *protocol.Message) error {
+	if atomic.LoadInt32(&c.connected) == 0 {
+		return ErrNotConnected
 	}
 
-	if err := c.conn.SendMessage(message); err != nil {
-		atomic.AddInt64(&c.metrics.ErrorCount, 1)
-		return fmt.Errorf("failed to send message: %w", err)
+	if atomic.LoadInt32(&c.closed) == 1 {
+		return ErrClientClosed
 	}
 
-	atomic.AddInt64(&c.metrics.MessagesSent, 1)
-	c.metrics.LastActivity = time.Now()
+	// Set source client ID
+	msg.SourceClientID = c.id
+
+	c.logger.Debug("Sending message",
+		log.String("message_id", string(msg.ID)),
+		log.String("type", msg.Type.String()))
+
+	return c.conn.SendMessage(msg)
+}
+
+// SendMessageWithTimeout sends a message with a timeout
+func (c *Client) SendMessageWithTimeout(msg *protocol.Message, timeout time.Duration) error {
+	if atomic.LoadInt32(&c.connected) == 0 {
+		return ErrNotConnected
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	errChan := c.conn.SendMessageAsync(msg)
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// SendString sends a string message
+func (c *Client) SendString(msgType protocol.MessageType, text string) error {
+	msg := protocol.NewMessageFromString(msgType, text)
+	return c.SendMessage(msg)
+}
+
+// SendJSON sends a JSON message
+func (c *Client) SendJSON(msgType protocol.MessageType, data interface{}) error {
+	msg, err := protocol.NewMessageFromJSON(msgType, data)
+	if err != nil {
+		return err
+	}
+	return c.SendMessage(msg)
+}
+
+// SendBytes sends a binary message
+func (c *Client) SendBytes(msgType protocol.MessageType, data []byte) error {
+	msg := protocol.NewMessageFromBytes(msgType, data)
+	return c.SendMessage(msg)
+}
+
+// JoinGroup joins a group by name
+func (c *Client) JoinGroup(groupName string) error {
+	if atomic.LoadInt32(&c.connected) == 0 {
+		return ErrNotConnected
+	}
+
+	c.logger.Info("Joining group", log.String("group", groupName))
+
+	// Send join group message
+	builder := protocol.NewMessageBuilder(c.logger)
+	msg := builder.
+		WithType(protocol.MessageTypeControl).
+		WithJSON(map[string]interface{}{
+			"action": "join_group",
+			"group":  groupName,
+		}).
+		Build()
+
+	err := c.SendMessage(msg)
+	if err != nil {
+		c.logger.Error("Failed to send join group message", log.Error(err))
+		return err
+	}
+
+	// Store group membership (will be confirmed by server response)
+	groupID := protocol.GroupID(groupName) // Simplified for example
+	c.groups.Store(groupID, true)
+
+	// Emit event
+	c.emitEvent(Event{
+		Type:      EventTypeJoinedGroup,
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"group": groupName,
+		},
+	})
 
 	return nil
 }
 
-// OnMessage устанавливает обработчик для определенного типа сообщений
-func (c *Client) OnMessage(msgType string, handler MessageHandler) {
-	c.handlersMu.Lock()
-	defer c.handlersMu.Unlock()
-	c.messageHandlers[msgType] = handler
+// LeaveGroup leaves a group by name
+func (c *Client) LeaveGroup(groupName string) error {
+	if atomic.LoadInt32(&c.connected) == 0 {
+		return ErrNotConnected
+	}
+
+	c.logger.Info("Leaving group", log.String("group", groupName))
+
+	// Send leave group message
+	builder := protocol.NewMessageBuilder(c.logger)
+	msg := builder.
+		WithType(protocol.MessageTypeControl).
+		WithJSON(map[string]interface{}{
+			"action": "leave_group",
+			"group":  groupName,
+		}).
+		Build()
+
+	err := c.SendMessage(msg)
+	if err != nil {
+		c.logger.Error("Failed to send leave group message", log.Error(err))
+		return err
+	}
+
+	// Remove group membership
+	groupID := protocol.GroupID(groupName)
+	c.groups.Delete(groupID)
+
+	// Emit event
+	c.emitEvent(Event{
+		Type:      EventTypeLeftGroup,
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"group": groupName,
+		},
+	})
+
+	return nil
 }
 
-// OnAnyMessage устанавливает обработчик по умолчанию
-func (c *Client) OnAnyMessage(handler MessageHandler) {
-	c.defaultHandler = handler
+// SubscribeToScope subscribes to a data scope
+func (c *Client) SubscribeToScope(scopeName string) error {
+	if atomic.LoadInt32(&c.connected) == 0 {
+		return ErrNotConnected
+	}
+
+	c.logger.Info("Subscribing to scope", log.String("scope", scopeName))
+
+	// Send subscribe message
+	builder := protocol.NewMessageBuilder(c.logger)
+	msg := builder.
+		WithType(protocol.MessageTypeControl).
+		WithJSON(map[string]interface{}{
+			"action": "subscribe_scope",
+			"scope":  scopeName,
+		}).
+		Build()
+
+	err := c.SendMessage(msg)
+	if err != nil {
+		c.logger.Error("Failed to send subscribe scope message", log.Error(err))
+		return err
+	}
+
+	// Store scope subscription
+	scopeID := protocol.ScopeID(scopeName)
+	c.scopes.Store(scopeID, true)
+
+	// Emit event
+	c.emitEvent(Event{
+		Type:      EventTypeJoinedScope,
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"scope": scopeName,
+		},
+	})
+
+	return nil
 }
 
-// OnConnect устанавливает callback подключения
-func (c *Client) OnConnect(callback func()) {
-	c.onConnect = callback
+// UnsubscribeFromScope unsubscribes from a data scope
+func (c *Client) UnsubscribeFromScope(scopeName string) error {
+	if atomic.LoadInt32(&c.connected) == 0 {
+		return ErrNotConnected
+	}
+
+	c.logger.Info("Unsubscribing from scope", log.String("scope", scopeName))
+
+	// Send unsubscribe message
+	builder := protocol.NewMessageBuilder(c.logger)
+	msg := builder.
+		WithType(protocol.MessageTypeControl).
+		WithJSON(map[string]interface{}{
+			"action": "unsubscribe_scope",
+			"scope":  scopeName,
+		}).
+		Build()
+
+	err := c.SendMessage(msg)
+	if err != nil {
+		c.logger.Error("Failed to send unsubscribe scope message", log.Error(err))
+		return err
+	}
+
+	// Remove scope subscription
+	scopeID := protocol.ScopeID(scopeName)
+	c.scopes.Delete(scopeID)
+
+	// Emit event
+	c.emitEvent(Event{
+		Type:      EventTypeLeftScope,
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"scope": scopeName,
+		},
+	})
+
+	return nil
 }
 
-// OnDisconnect устанавливает callback отключения
-func (c *Client) OnDisconnect(callback func(reason string)) {
-	c.onDisconnect = callback
+// OnMessage registers a message handler for a specific message type
+func (c *Client) OnMessage(msgType protocol.MessageType, handler MessageHandler) {
+	c.handlerMutex.Lock()
+	defer c.handlerMutex.Unlock()
+
+	c.messageHandlers[msgType] = append(c.messageHandlers[msgType], handler)
+	c.logger.Debug("Message handler registered", log.String("type", string(msgType)))
 }
 
-// OnError устанавливает callback ошибок
-func (c *Client) OnError(callback func(error)) {
-	c.onError = callback
+// OnEvent registers an event handler for a specific event type
+func (c *Client) OnEvent(eventType EventType, handler EventHandler) {
+	c.handlerMutex.Lock()
+	defer c.handlerMutex.Unlock()
+
+	c.eventHandlers[eventType] = append(c.eventHandlers[eventType], handler)
+	c.logger.Debug("Event handler registered", log.String("type", string(eventType)))
 }
 
-// GetMetrics возвращает метрики клиента
-func (c *Client) GetMetrics() ClientMetrics {
-	return c.metrics
-}
-
-// SetMetadata устанавливает метаданные
+// SetMetadata sets client metadata
 func (c *Client) SetMetadata(key string, value interface{}) {
-	if c.conn != nil {
-		c.conn.SetMetadata(key, value)
-	}
+	c.metadata.Store(key, value)
+	c.logger.Debug("Metadata set", log.String("key", key))
 }
 
-// GetMetadata получает метаданные
+// GetMetadata gets client metadata
 func (c *Client) GetMetadata(key string) (interface{}, bool) {
-	if c.conn != nil {
-		return c.conn.GetMetadata(key)
-	}
-	return nil, false
+	return c.metadata.Load(key)
 }
 
-// messageLoop обрабатывает входящие сообщения
-func (c *Client) messageLoop() {
-	defer func() {
-		if c.onDisconnect != nil {
-			c.onDisconnect("message loop ended")
-		}
+// ID returns the client ID
+func (c *Client) ID() protocol.ClientID {
+	return c.id
+}
+
+// IsConnected returns true if the client is connected
+func (c *Client) IsConnected() bool {
+	return atomic.LoadInt32(&c.connected) == 1
+}
+
+// IsClosed returns true if the client is closed
+func (c *Client) IsClosed() bool {
+	return atomic.LoadInt32(&c.closed) == 1
+}
+
+// ConnectionInfo returns information about the current connection
+func (c *Client) ConnectionInfo() (protocol.ConnectionInfo, error) {
+	if c.conn == nil {
+		return protocol.ConnectionInfo{}, ErrNotConnected
+	}
+	return c.conn.Info(), nil
+}
+
+// Ping sends a ping to the server and returns the latency
+func (c *Client) Ping() (time.Duration, error) {
+	if atomic.LoadInt32(&c.connected) == 0 {
+		return 0, ErrNotConnected
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.config.HealthCheckTimeout)
+	defer cancel()
+
+	return c.conn.Ping(ctx)
+}
+
+// startWorkers starts background worker goroutines
+func (c *Client) startWorkers() {
+	c.workerGroup.Add(3)
+
+	// Message receiver
+	go func() {
+		defer c.workerGroup.Done()
+		c.messageReceiver()
 	}()
 
-	for {
-		select {
-		case <-c.ctx.Done():
-			return
-		default:
-			if !c.IsConnected() {
-				return
-			}
-
-			message, err := c.conn.ReceiveMessage()
-			if err != nil {
-				if c.onError != nil {
-					c.onError(err)
-				}
-				atomic.AddInt64(&c.metrics.ErrorCount, 1)
-				return
-			}
-
-			atomic.AddInt64(&c.metrics.MessagesReceived, 1)
-			c.metrics.LastActivity = time.Now()
-
-			// Обрабатываем сообщение
-			go c.handleMessage(message)
-		}
-	}
-}
-
-// handleMessage обрабатывает полученное сообщение
-func (c *Client) handleMessage(message protocol.Message) {
-	defer func() {
-		if r := recover(); r != nil {
-			if c.onError != nil {
-				c.onError(fmt.Errorf("panic in message handler: %v", r))
-			}
-		}
+	// Health monitor
+	go func() {
+		defer c.workerGroup.Done()
+		c.healthMonitor()
 	}()
 
-	msgType := message.Type()
-
-	// Ищем специфичный обработчик
-	c.handlersMu.RLock()
-	handler, exists := c.messageHandlers[msgType]
-	c.handlersMu.RUnlock()
-
-	if exists {
-		if err := handler(c.ctx, message); err != nil && c.onError != nil {
-			c.onError(fmt.Errorf("handler error for %s: %w", msgType, err))
-		}
-		return
-	}
-
-	// Используем обработчик по умолчанию
-	if c.defaultHandler != nil {
-		if err := c.defaultHandler(c.ctx, message); err != nil && c.onError != nil {
-			c.onError(fmt.Errorf("default handler error: %w", err))
-		}
-	}
+	// Reconnection handler
+	go func() {
+		defer c.workerGroup.Done()
+		c.reconnectionHandler()
+	}()
 }
 
-// heartbeatLoop отправляет heartbeat сообщения
-func (c *Client) heartbeatLoop() {
+// stopWorkers stops background worker goroutines
+func (c *Client) stopWorkers() {
+	// Workers will stop when connection is closed or client is done
+	c.workerGroup.Wait()
+}
+
+// messageReceiver handles incoming messages
+func (c *Client) messageReceiver() {
+	c.logger.Debug("Message receiver started")
+
+	for atomic.LoadInt32(&c.connected) == 1 && atomic.LoadInt32(&c.closed) == 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), c.config.MessageTimeout)
+		msg, err := c.conn.ReceiveMessage(ctx)
+		cancel()
+
+		if err != nil {
+			if atomic.LoadInt32(&c.connected) == 1 {
+				c.logger.Error("Failed to receive message", log.Error(err))
+			}
+			continue
+		}
+
+		if msg != nil {
+			c.handleMessage(msg)
+		}
+	}
+
+	c.logger.Debug("Message receiver stopped")
+}
+
+// handleMessage processes an incoming message
+func (c *Client) handleMessage(msg *protocol.Message) {
+	c.logger.Debug("Handling message",
+		log.String("message_id", string(msg.ID)),
+		log.String("type", string(msg.Type)))
+
+	c.handlerMutex.RLock()
+	handlers := c.messageHandlers[msg.Type]
+	c.handlerMutex.RUnlock()
+
+	for _, handler := range handlers {
+		go func(h MessageHandler) {
+			if err := h(msg); err != nil {
+				c.logger.Error("Message handler error", log.Error(err))
+			}
+		}(handler)
+	}
+
+	msg.Release()
+}
+
+// healthMonitor monitors connection health
+func (c *Client) healthMonitor() {
+	c.logger.Debug("Health monitor started")
+
 	ticker := time.NewTicker(c.config.HeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			if c.IsConnected() {
-				_ = c.Send(protocol.MessageTypeHeartbeat, []byte("ping"))
+			if atomic.LoadInt32(&c.connected) == 1 {
+				_, err := c.Ping()
+				if err != nil {
+					c.logger.Warn("Health check failed", log.Error(err))
+					// Connection will be handled by reconnection handler
+				}
 			}
-		case <-c.ctx.Done():
+		case <-c.done:
+			c.logger.Debug("Health monitor stopped")
 			return
 		}
 	}
 }
 
-// Convenience methods для частых операций
+// reconnectionHandler handles automatic reconnection
+func (c *Client) reconnectionHandler() {
+	c.logger.Debug("Reconnection handler started")
 
-// JoinGroup присоединяется к группе
-func (c *Client) JoinGroup(groupID string) error {
-	message := protocol.NewMessage(protocol.MessageTypeJoinGroup, []byte(groupID))
-	message.SetHeader("group_id", groupID)
-	return c.SendMessage(message)
-}
+	for atomic.LoadInt32(&c.closed) == 0 {
+		select {
+		case <-c.conn.Done():
+			if atomic.LoadInt32(&c.closed) == 1 {
+				return
+			}
 
-// LeaveGroup покидает группу
-func (c *Client) LeaveGroup(groupID string) error {
-	message := protocol.NewMessage(protocol.MessageTypeLeaveGroup, []byte(groupID))
-	message.SetHeader("group_id", groupID)
-	return c.SendMessage(message)
-}
+			c.logger.Warn("Connection lost, attempting to reconnect")
+			atomic.StoreInt32(&c.connected, 0)
 
-// SendToGroup отправляет сообщение в группу (через сервер)
-func (c *Client) SendToGroup(groupID, msgType string, payload []byte) error {
-	message := protocol.NewMessage(msgType, payload)
-	message.SetHeader("target_group", groupID)
-	return c.SendMessage(message)
-}
+			// Emit reconnecting event
+			c.emitEvent(Event{
+				Type:      EventTypeReconnecting,
+				Timestamp: time.Now(),
+			})
 
-// SendChat отправляет чат сообщение
-func (c *Client) SendChat(text string) error {
-	return c.Send(protocol.MessageTypeChat, []byte(text))
-}
+			// Attempt reconnection
+			for attempt := 1; attempt <= c.config.MaxReconnectAttempts; attempt++ {
+				c.logger.Info("Reconnection attempt", log.Int("attempt", attempt))
 
-// SendPlayerMove о��правляет сообщение о движении игрока
-func (c *Client) SendPlayerMove(x, y, z float32) error {
-	// Простая сериализация координат
-	payload := fmt.Sprintf("%.2f,%.2f,%.2f", x, y, z)
-	return c.Send(protocol.MessageTypePlayerMove, []byte(payload))
-}
+				ctx, cancel := context.WithTimeout(context.Background(), c.config.ConnectTimeout)
+				err := c.Connect(ctx)
+				cancel()
 
-// SendPlayerAction отправляет сообщение о действии игрока
-func (c *Client) SendPlayerAction(action string, data []byte) error {
-	message := protocol.NewMessage(protocol.MessageTypePlayerAction, data)
-	message.SetHeader("action", action)
-	return c.SendMessage(message)
-}
+				if err == nil {
+					c.logger.Info("Reconnected successfully")
+					break
+				}
 
-// Ping отправляет ping и измеряет latency
-func (c *Client) Ping() (time.Duration, error) {
-	if !c.IsConnected() {
-		return 0, fmt.Errorf("client not connected")
+				c.logger.Error("Reconnection failed",
+					log.Int("attempt", attempt),
+					log.Error(err))
+
+				if attempt < c.config.MaxReconnectAttempts {
+					time.Sleep(c.config.ReconnectInterval)
+				}
+			}
+
+		case <-c.done:
+			c.logger.Debug("Reconnection handler stopped")
+			return
+		}
 	}
-
-	start := time.Now()
-	pingID := fmt.Sprintf("ping_%d", start.UnixNano())
-
-	// Отправляем ping
-	message := protocol.NewMessage("ping", []byte(pingID))
-	if err := c.SendMessage(message); err != nil {
-		return 0, err
-	}
-
-	// Ждем pong (упрощенная реализация)
-	// В реальной реализации нужно было ��ы ждать конкретный ответ
-	return time.Since(start), nil
 }
 
-// GetConnectionInfo возвращает информацию о соединении
-func (c *Client) GetConnectionInfo() map[string]interface{} {
-	info := make(map[string]interface{})
+// emitEvent emits an event to registered handlers
+func (c *Client) emitEvent(event Event) {
+	c.handlerMutex.RLock()
+	handlers := c.eventHandlers[event.Type]
+	c.handlerMutex.RUnlock()
 
-	if c.conn != nil {
-		info["id"] = c.conn.ID()
-		info["remote_addr"] = c.conn.RemoteAddr().String()
-		info["local_addr"] = c.conn.LocalAddr().String()
-		info["last_activity"] = c.conn.LastActivity()
+	for _, handler := range handlers {
+		go func(h EventHandler) {
+			if err := h(event); err != nil {
+				c.logger.Error("Event handler error", log.Error(err))
+			}
+		}(handler)
 	}
-
-	info["connected"] = c.IsConnected()
-	info["metrics"] = c.metrics
-
-	return info
 }

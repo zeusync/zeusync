@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/zeusync/zeusync/internal/server"
 )
@@ -13,7 +14,7 @@ import (
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv := server.NewServer(ctx)
+	srv := server.NewServer(server.DefaultServerConfig())
 
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGINT)
@@ -25,7 +26,10 @@ func main() {
 
 	<-stopCh
 	cancel()
-	if err := srv.Stop(); err != nil {
+	stopCtx, stopCtxCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stopCtxCancel()
+
+	if err := srv.Stop(stopCtx); err != nil {
 		fmt.Println("Error stopping server:", err)
 	}
 }
