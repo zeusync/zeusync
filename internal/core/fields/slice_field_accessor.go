@@ -2,8 +2,9 @@ package fields
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/pkg/sequence"
 	"time"
+
+	"github.com/zeusync/zeusync/pkg/sequence"
 )
 
 var _ SliceFieldAccessor[any, []any] = (*SFA[any])(nil)

@@ -2,10 +2,11 @@ package protocol
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
 	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
 )
 
 // Connection represents an abstract network connection

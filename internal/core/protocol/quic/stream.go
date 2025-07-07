@@ -3,11 +3,12 @@ package quic
 import (
 	"context"
 	"encoding/binary"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol"
 	"io"
 	"sync/atomic"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 
 	"github.com/quic-go/quic-go"
 )

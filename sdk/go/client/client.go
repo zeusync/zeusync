@@ -3,12 +3,13 @@ package client
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol"
-	"github.com/zeusync/zeusync/internal/core/protocol/quic"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
+	"github.com/zeusync/zeusync/internal/core/protocol"
+	"github.com/zeusync/zeusync/internal/core/protocol/quic"
 )
 
 // Client represents a ZeuSync client connection

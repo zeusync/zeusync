@@ -2,11 +2,12 @@ package protocol
 
 import (
 	"encoding/json"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
 )
 
 // Serializable represents an object that can be serialized to bytes

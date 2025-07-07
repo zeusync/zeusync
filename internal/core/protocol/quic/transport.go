@@ -3,12 +3,12 @@ package quic
 import (
 	"context"
 	"crypto/tls"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol"
 	"net"
 	"sync"
-
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 
 	"github.com/quic-go/quic-go"
 )

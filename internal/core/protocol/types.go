@@ -1,8 +1,9 @@
 package protocol
 
 import (
-	"github.com/google/uuid"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ConnectionID represents a unique identifier for a connection

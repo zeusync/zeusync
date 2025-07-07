@@ -2,11 +2,12 @@ package fields
 
 import (
 	"errors"
-	"github.com/stretchr/testify/require"
 	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestBatch tests batch operations

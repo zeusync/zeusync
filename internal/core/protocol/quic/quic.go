@@ -10,11 +10,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol"
 	"math/big"
 	"net"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 )
 
 // Package constants

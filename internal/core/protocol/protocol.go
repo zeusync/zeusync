@@ -3,9 +3,10 @@ package protocol
 import (
 	"context"
 	"errors"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
 	"sync/atomic"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
 )
 
 // Protocol represents the main networking protocol interface
@@ -392,9 +393,7 @@ const (
 
 // Additional protocol errors
 
-var (
-	ErrProtocolClosed = errors.New("protocol is closed")
-)
+var ErrProtocolClosed = errors.New("protocol is closed")
 
 // Global protocol instance
 

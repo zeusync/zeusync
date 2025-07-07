@@ -2,9 +2,10 @@ package protocol
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
 	"sync/atomic"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
 )
 
 // Transport represents an abstract network transport layer

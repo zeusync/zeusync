@@ -2,10 +2,11 @@ package quic
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol"
 	"net"
 	"sync/atomic"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
+	"github.com/zeusync/zeusync/internal/core/protocol"
 
 	"github.com/quic-go/quic-go"
 )

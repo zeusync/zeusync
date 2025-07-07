@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"github.com/zeusync/zeusync/internal/core/protocol"
-	"github.com/zeusync/zeusync/sdk/go/client"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
+	"github.com/zeusync/zeusync/internal/core/protocol"
+	"github.com/zeusync/zeusync/sdk/go/client"
 )
 
 func main() {

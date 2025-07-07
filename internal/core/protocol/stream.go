@@ -2,9 +2,10 @@ package protocol
 
 import (
 	"context"
-	"github.com/zeusync/zeusync/internal/core/observability/log"
 	"sync/atomic"
 	"time"
+
+	"github.com/zeusync/zeusync/internal/core/observability/log"
 )
 
 // StreamState represents the current state of a stream
