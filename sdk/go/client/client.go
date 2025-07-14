@@ -69,7 +69,7 @@ type Config struct {
 // DefaultClientConfig returns default client configuration
 func DefaultClientConfig() Config {
 	return Config{
-		ServerAddr:           "localhost:8080",
+		ServerAddr:           "127.0.0.1:8080",
 		ConnectTimeout:       30 * time.Second,
 		ReconnectInterval:    5 * time.Second,
 		MaxReconnectAttempts: 10,

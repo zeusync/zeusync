@@ -186,8 +186,11 @@ func (t *Transport) DialWithConfig(ctx context.Context, addr string, config *pro
 
 	// Create TLS config for client
 	tlsConfig := t.config.TLSConfig.Clone()
-	if tlsConfig.ServerName == "" {
-		host, _, err := net.SplitHostPort(addr)
+	// For development with self-signed certificates, don't set ServerName
+	// when using InsecureSkipVerify to avoid name verification issues
+	if !tlsConfig.InsecureSkipVerify && tlsConfig.ServerName == "" {
+		var host string
+		host, _, err = net.SplitHostPort(addr)
 		if err != nil {
 			tlsConfig.ServerName = addr
 		} else {
@@ -214,7 +217,7 @@ func (t *Transport) DialWithConfig(ctx context.Context, addr string, config *pro
 }
 
 // HealthCheck performs a health check on the QUIC transport
-func (t *Transport) HealthCheck(ctx context.Context) protocol.HealthCheck {
+func (t *Transport) HealthCheck(_ context.Context) protocol.HealthCheck {
 	start := time.Now()
 
 	if t.IsClosed() {

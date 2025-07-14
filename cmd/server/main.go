@@ -19,7 +19,6 @@ func main() {
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGINT)
 
-	// Start the server
 	if err := srv.Start(ctx); err != nil {
 		fmt.Println("Error starting server:", err)
 	}

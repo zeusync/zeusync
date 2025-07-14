@@ -16,7 +16,7 @@ import (
 func main() {
 	// Create client configuration
 	config := client.DefaultClientConfig()
-	config.ServerAddr = "localhost:8080"
+	config.ServerAddr = "127.0.0.1:8080"
 	config.LogLevel = log.LevelInfo
 	config.HeartbeatInterval = 10 * time.Second
 

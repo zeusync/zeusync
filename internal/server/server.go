@@ -3,12 +3,15 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/zeusync/zeusync/internal/core/protocol"
+	"github.com/zeusync/zeusync/internal/core/protocol/quic"
+
 	"github.com/zeusync/zeusync/internal/core/observability/log"
-	"g
 )
 
 // Server represents a ZeuSync game server
@@ -75,8 +78,8 @@ type Config struct {
 // DefaultServerConfig returns default server configuration
 func DefaultServerConfig() Config {
 	return Config{
-		ListenAddr:          ":8080",
-		MaxClients:          10000,
+		ListenAddr:          "127.0.0.1:8080",
+		MaxClients:          10_000,
 		MessageTimeout:      10 * time.Second,
 		MaxMessageSize:      1024 * 1024, // 1MB
 		MessageBufferSize:   1000,
@@ -256,20 +259,29 @@ func (s *Server) Close() error {
 // acceptConnections accepts incoming client connections
 func (s *Server) acceptConnections() {
 	s.logger.Debug("Connection acceptor started")
+	defer s.logger.Debug("Connection acceptor stopped")
 
 	for atomic.LoadInt32(&s.running) == 1 {
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		conn, err := s.listener.Accept(ctx)
-		cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
+		conn, err := s.listener.Accept(ctx)
 		if err != nil {
-			if atomic.LoadInt32(&s.running) == 1 {
+			cancel()
+
+			if atomic.LoadInt32(&s.running) == 0 {
+				return
+			}
+
+			if !errors.Is(err, context.DeadlineExceeded) {
 				s.logger.Error("Failed to accept connection", log.Error(err))
 			}
+
+			// Добавляем небольшую паузу перед повторной попыткой
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		cancel()
 
-		// Check client limit
 		if int(atomic.LoadInt64(&s.clientCount)) >= s.config.MaxClients {
 			s.logger.Warn("Maximum clients reached, rejecting connection",
 				log.String("remote_addr", conn.RemoteAddr().String()))
@@ -277,7 +289,6 @@ func (s *Server) acceptConnections() {
 			continue
 		}
 
-		// Create client session
 		session := &ClientSession{
 			ID:          protocol.GenerateClientID(),
 			Connection:  conn,
@@ -286,7 +297,6 @@ func (s *Server) acceptConnections() {
 			Active:      1,
 		}
 
-		// Add to clients map
 		s.clients.Store(session.ID, session)
 		atomic.AddInt64(&s.clientCount, 1)
 
@@ -295,11 +305,8 @@ func (s *Server) acceptConnections() {
 			log.String("remote_addr", conn.RemoteAddr().String()),
 			log.Int64("total_clients", atomic.LoadInt64(&s.clientCount)))
 
-		// Handle client in separate goroutine
 		go s.handleClient(session)
 	}
-
-	s.logger.Debug("Connection acceptor stopped")
 }
 
 // handleClient handles a client session

@@ -17,7 +17,7 @@ func main() {
 	config := server.DefaultServerConfig()
 	config.ListenAddr = ":8080"
 	config.MaxClients = 1000
-	config.LogLevel = log.LevelInfo
+	config.LogLevel = log.LevelDebug
 	config.HealthCheckInterval = 30 * time.Second
 	config.ClientTimeout = 2 * time.Minute
 
