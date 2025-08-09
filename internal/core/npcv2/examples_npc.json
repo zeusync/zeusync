@@ -1,0 +1,18 @@
+{
+  "root": "Root",
+  "nodes": {
+    "Root": {"type":"Selector", "children":["AttackIfPossible", "RunAway", "Idle"]},
+
+    "AttackIfPossible": {"type":"Sequence", "children":["IsEnemyVisible", "IsStrongEnough", "Attack"]},
+    "IsEnemyVisible": {"type":"Condition", "condition":"IsTrue", "params":{"key":"enemy_visible"}},
+    "IsStrongEnough": {"type":"Condition", "condition":"IsTrue", "params":{"key":"strong_enough"}},
+    "Attack": {"type":"Action", "action":"Noop"},
+
+    "RunAway": {"type":"Action", "action":"SetBool", "params":{"key":"flee", "value":true}},
+
+    "Idle": {"type":"Action", "action":"Noop"}
+  },
+  "sensors": [
+    {"name":"Inv", "type":"InventorySensor", "params":{"key":"arrows", "out":"strong_enough", "threshold":5}}
+  ]
+}

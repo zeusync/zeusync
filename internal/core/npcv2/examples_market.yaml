@@ -1,0 +1,26 @@
+root: Root
+nodes:
+  Root:
+    type: Sequence
+    children: [DemandHigh, Actions]
+  DemandHigh:
+    type: Condition
+    condition: IsTrue
+    params:
+      key: demand_high
+  Actions:
+    type: Sequence
+    children: [IncreasePrice, OrderMore]
+  IncreasePrice:
+    type: Action
+    action: Noop
+  OrderMore:
+    type: Action
+    action: Noop
+sensors:
+  - name: Trend
+    type: InventorySensor
+    params:
+      key: stock
+      out: demand_high
+      threshold: 10
