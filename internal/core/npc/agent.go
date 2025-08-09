@@ -1,447 +1,104 @@
 package npc
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"sort"
-	"sync"
+	"encoding/gob"
+	"errors"
 	"time"
+
+	bus "github.com/zeusync/zeusync/internal/core/events/bus"
 )
 
-// AIAgent represents a complete AI agent implementation
-type AIAgent struct {
-	mu            sync.RWMutex
-	id            string
-	name          string
-	blackboard    *Blackboard
-	memory        Memory
-	behaviorTree  Node
-	sensors       map[string]Sensor
-	eventHandlers map[string][]EventHandler
-
-	// State management
-	active     bool
-	lastUpdate time.Time
-	updateRate time.Duration
-
-	// Event queue
-	eventQueue []Event
-	eventMu    sync.Mutex
+// agent is a default Agent implementation.
+type agent struct {
+	bb      Blackboard
+	mem     Memory
+	events  bus.EventBus
+	tree    DecisionTree
+	sensors []Sensor
+	clock   func() time.Time
 }
 
-// NewAIAgent creates a new AI agent
-func NewAIAgent(id, name string) *AIAgent {
-	return &AIAgent{
-		id:            id,
-		name:          name,
-		blackboard:    NewBlackboard(),
-		memory:        NewBasicMemory(),
-		sensors:       make(map[string]Sensor),
-		eventHandlers: make(map[string][]EventHandler),
-		active:        true,
-		updateRate:    time.Millisecond * 100, // Default 10 FPS
-		eventQueue:    make([]Event, 0),
+// NewAgent constructs a new Agent from components.
+func NewAgent(bb Blackboard, mem Memory, eb bus.EventBus, tree DecisionTree, sensors []Sensor) Agent {
+	if bb == nil {
+		bb = NewBlackboard()
 	}
-}
-
-// GetID returns the agent's unique identifier
-func (a *AIAgent) GetID() string {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.id
-}
-
-// GetName returns the agent's name
-func (a *AIAgent) GetName() string {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.name
-}
-
-// GetBlackboard returns the agent's blackboard
-func (a *AIAgent) GetBlackboard() *Blackboard {
-	return a.blackboard
-}
-
-// GetMemory returns the agent's memory system
-func (a *AIAgent) GetMemory() Memory {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.memory
-}
-
-// SetMemory sets the agent's memory system
-func (a *AIAgent) SetMemory(memory Memory) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.memory = memory
-}
-
-// Update updates the agent (called each frame/tick)
-func (a *AIAgent) Update(ctx context.Context, deltaTime time.Duration) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if !a.active {
-		return nil
+	if mem == nil {
+		mem = NewMemory()
 	}
-
-	// Check if enough time has passed since last update
-	if time.Since(a.lastUpdate) < a.updateRate {
-		return nil
+	if eb == nil {
+		eb = NewEventBus()
 	}
-
-	a.lastUpdate = time.Now()
-
-	// Process events
-	if err := a.processEvents(ctx); err != nil {
-		return fmt.Errorf("failed to process events: %w", err)
-	}
-
-	// Update sensors
-	if err := a.updateSensors(ctx, deltaTime); err != nil {
-		return fmt.Errorf("failed to update sensors: %w", err)
-	}
-
-	// Execute behavior tree
-	if a.behaviorTree != nil {
-		execCtx := &ExecutionContext{
-			Context:    ctx,
-			Blackboard: a.blackboard,
-			Agent:      a,
-			DeltaTime:  deltaTime,
-		}
-
-		status := a.behaviorTree.Execute(execCtx)
-		a.blackboard.Set("last_behavior_status", status.String())
-		a.blackboard.Set("last_update_time", time.Now())
-	}
-
-	return nil
+	return &agent{bb: bb, mem: mem, events: eb, tree: tree, sensors: sensors, clock: time.Now}
 }
 
-// processEvents processes all queued events
-func (a *AIAgent) processEvents(ctx context.Context) error {
-	a.eventMu.Lock()
-	events := make([]Event, len(a.eventQueue))
-	copy(events, a.eventQueue)
-	a.eventQueue = a.eventQueue[:0] // Clear the queue
-	a.eventMu.Unlock()
+func (a *agent) Blackboard() Blackboard { return a.bb }
+func (a *agent) Memory() Memory         { return a.mem }
+func (a *agent) Events() bus.EventBus   { return a.events }
 
-	for _, event := range events {
-		if handlers, exists := a.eventHandlers[event.Type]; exists {
-			// Sort handlers by priority (higher priority first)
-			sort.Slice(handlers, func(i, j int) bool {
-				return handlers[i].GetPriority() > handlers[j].GetPriority()
-			})
-
-			for _, handler := range handlers {
-				execCtx := &ExecutionContext{
-					Context:    ctx,
-					Blackboard: a.blackboard,
-					Agent:      a,
-				}
-
-				if err := handler.Handle(execCtx, event); err != nil {
-					return fmt.Errorf("event handler %s failed: %w", handler.GetEventType(), err)
-				}
-			}
-		}
-
-		// Store event in memory
-		if a.memory != nil {
-			memEvent := MemoryEvent{
-				ID:         event.ID,
-				Type:       event.Type,
-				Timestamp:  event.Timestamp,
-				Data:       event.Data,
-				Importance: float64(event.Priority) / 10.0, // Convert priority to importance
-				Tags:       []string{"event", event.Type},
-			}
-
-			a.memory.Remember(memEvent)
+func (a *agent) Step(ctx context.Context) (Status, error) {
+	// 1) sensors
+	for _, s := range a.sensors {
+		if err := s.Update(ctx, a.bb); err != nil {
+			return StatusFailure, err
 		}
 	}
-
-	return nil
+	// 2) behavior tree
+	tc := TickContext{Ctx: ctx, BB: a.bb, Memory: a.mem, Clock: a.clock}
+	start := a.clock()
+	st, err := a.tree.Tick(tc)
+	// 3) history
+	a.mem.AppendDecision(DecisionRecord{Node: a.tree.Root().Name(), Status: st, Duration: a.clock().Sub(start), Timestamp: a.clock()})
+	return st, err
 }
 
-// updateSensors updates all active sensors
-func (a *AIAgent) updateSensors(ctx context.Context, deltaTime time.Duration) error {
-	execCtx := &ExecutionContext{
-		Context:    ctx,
-		Blackboard: a.blackboard,
-		Agent:      a,
-		DeltaTime:  deltaTime,
-	}
-
-	for _, sensor := range a.sensors {
-		if sensor.IsEnabled() {
-			if err := sensor.Update(execCtx); err != nil {
-				return fmt.Errorf("sensor %s update failed: %w", sensor.GetName(), err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// HandleEvent processes an event
-func (a *AIAgent) HandleEvent(event Event) error {
-	a.eventMu.Lock()
-	defer a.eventMu.Unlock()
-
-	// Add event to queue
-	a.eventQueue = append(a.eventQueue, event)
-
-	return nil
-}
-
-// AddSensor adds a sensor to the agent
-func (a *AIAgent) AddSensor(sensor Sensor) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	a.sensors[sensor.GetName()] = sensor
-}
-
-// RemoveSensor removes a sensor from the agent
-func (a *AIAgent) RemoveSensor(sensorName string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if _, exists := a.sensors[sensorName]; exists {
-		delete(a.sensors, sensorName)
-		return true
-	}
-	return false
-}
-
-// GetSensors returns all sensors
-func (a *AIAgent) GetSensors() []Sensor {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	sensors := make([]Sensor, 0, len(a.sensors))
-	for _, sensor := range a.sensors {
-		sensors = append(sensors, sensor)
-	}
-	return sensors
-}
-
-// AddEventHandler adds an event handler
-func (a *AIAgent) AddEventHandler(handler EventHandler) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	eventType := handler.GetEventType()
-	if a.eventHandlers[eventType] == nil {
-		a.eventHandlers[eventType] = make([]EventHandler, 0)
-	}
-
-	a.eventHandlers[eventType] = append(a.eventHandlers[eventType], handler)
-}
-
-// RemoveEventHandler removes an event handler
-func (a *AIAgent) RemoveEventHandler(eventType string, handler EventHandler) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	handlers, exists := a.eventHandlers[eventType]
-	if !exists {
-		return false
-	}
-
-	for i, h := range handlers {
-		if h == handler {
-			a.eventHandlers[eventType] = append(handlers[:i], handlers[i+1:]...)
-			return true
-		}
-	}
-
-	return false
-}
-
-// SetBehaviorTree sets the agent's behavior tree
-func (a *AIAgent) SetBehaviorTree(root Node) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	a.behaviorTree = root
-}
-
-// GetBehaviorTree returns the agent's behavior tree
-func (a *AIAgent) GetBehaviorTree() Node {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	return a.behaviorTree
-}
-
-// SetUpdateRate sets the agent's update rate
-func (a *AIAgent) SetUpdateRate(rate time.Duration) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	a.updateRate = rate
-}
-
-// GetUpdateRate returns the agent's update rate
-func (a *AIAgent) GetUpdateRate() time.Duration {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	return a.updateRate
-}
-
-// Save exports the agent's state
-func (a *AIAgent) Save() ([]byte, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	// Export blackboard
-	blackboardData, err := a.blackboard.ToJSON()
+func (a *agent) SaveState() ([]byte, error) {
+	bbBytes, err := a.bb.MarshalBinary()
 	if err != nil {
-		return nil, fmt.Errorf("failed to export blackboard: %w", err)
+		return nil, err
 	}
-
-	// Export memory
-	var memoryData []byte
-	if a.memory != nil {
-		memoryData, err = a.memory.Save()
-		if err != nil {
-			return nil, fmt.Errorf("failed to export memory: %w", err)
-		}
+	memBytes, err := a.mem.Save()
+	if err != nil {
+		return nil, err
 	}
-
-	// Create agent state
-	state := struct {
-		ID         string          `json:"id"`
-		Name       string          `json:"name"`
-		Active     bool            `json:"active"`
-		UpdateRate time.Duration   `json:"update_rate"`
-		LastUpdate time.Time       `json:"last_update"`
-		Blackboard json.RawMessage `json:"blackboard"`
-		Memory     json.RawMessage `json:"memory,omitempty"`
-	}{
-		ID:         a.id,
-		Name:       a.name,
-		Active:     a.active,
-		UpdateRate: a.updateRate,
-		LastUpdate: a.lastUpdate,
-		Blackboard: blackboardData,
-		Memory:     memoryData,
+	// Use gob to encode a compact binary snapshot
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(struct{ BB, Mem []byte }{BB: bbBytes, Mem: memBytes}); err != nil {
+		return nil, err
 	}
-
-	return json.MarshalIndent(state, "", "  ")
+	return buf.Bytes(), nil
 }
 
-// Load imports the agent's state
-func (a *AIAgent) Load(data []byte) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	var state struct {
-		ID         string          `json:"id"`
-		Name       string          `json:"name"`
-		Active     bool            `json:"active"`
-		UpdateRate time.Duration   `json:"update_rate"`
-		LastUpdate time.Time       `json:"last_update"`
-		Blackboard json.RawMessage `json:"blackboard"`
-		Memory     json.RawMessage `json:"memory,omitempty"`
+func (a *agent) LoadState(b []byte) error {
+	var state struct{ BB, Mem []byte }
+	dec := gob.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(&state); err != nil {
+		return err
 	}
-
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("failed to unmarshal agent state: %w", err)
-	}
-
-	// Load basic properties
-	a.id = state.ID
-	a.name = state.Name
-	a.active = state.Active
-	a.updateRate = state.UpdateRate
-	a.lastUpdate = state.LastUpdate
-
-	// Load blackboard
-	if err := a.blackboard.FromJSON(state.Blackboard); err != nil {
-		return fmt.Errorf("failed to load blackboard: %w", err)
-	}
-
-	// Load memory
-	if len(state.Memory) > 0 && a.memory != nil {
-		if err := a.memory.Load(state.Memory); err != nil {
-			return fmt.Errorf("failed to load memory: %w", err)
+	if len(state.BB) > 0 {
+		if err := a.bb.UnmarshalBinary(state.BB); err != nil {
+			return err
 		}
 	}
-
+	if len(state.Mem) > 0 {
+		if err := a.mem.Load(state.Mem); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// Reset resets the agent to initial state
-func (a *AIAgent) Reset() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Clear blackboard
-	a.blackboard.Clear()
-
-	// Clear memory
-	if a.memory != nil {
-		a.memory.Clear()
+// BuildAgentFromConfig helper to build a minimal agent with default components using a config and registry
+func BuildAgentFromConfig(ctx context.Context, cfg *Config, reg Registry) (Agent, error) {
+	if cfg == nil {
+		return nil, errors.New("config is nil")
 	}
-
-	// Reset behavior tree
-	if a.behaviorTree != nil {
-		a.behaviorTree.Reset()
+	tree, sensors, err := cfg.Build(reg)
+	if err != nil {
+		return nil, err
 	}
-
-	// Clear event queue
-	a.eventMu.Lock()
-	a.eventQueue = a.eventQueue[:0]
-	a.eventMu.Unlock()
-
-	// Reset timestamps
-	a.lastUpdate = time.Time{}
-}
-
-// IsActive returns whether the agent is active
-func (a *AIAgent) IsActive() bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	return a.active
-}
-
-// SetActive sets the agent's active state
-func (a *AIAgent) SetActive(active bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	a.active = active
-}
-
-// GetStats returns agent statistics
-func (a *AIAgent) GetStats() map[string]interface{} {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	stats := map[string]interface{}{
-		"id":                 a.id,
-		"name":               a.name,
-		"active":             a.active,
-		"update_rate":        a.updateRate.String(),
-		"last_update":        a.lastUpdate,
-		"sensor_count":       len(a.sensors),
-		"handler_count":      len(a.eventHandlers),
-		"blackboard_keys":    len(a.blackboard.Keys()),
-		"blackboard_version": a.blackboard.GetVersion(),
-	}
-
-	// Add event queue stats
-	a.eventMu.Lock()
-	stats["queued_events"] = len(a.eventQueue)
-	a.eventMu.Unlock()
-
-	return stats
+	return NewAgent(NewBlackboard(), NewMemory(), NewEventBus(), tree, sensors), nil
 }

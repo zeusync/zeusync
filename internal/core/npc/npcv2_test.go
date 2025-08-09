@@ -1,4 +1,4 @@
-package npcv2
+package npc
 
 import (
 	"bytes"

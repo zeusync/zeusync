@@ -1,625 +1,373 @@
 package npc
 
 import (
+	"errors"
 	"math/rand"
 	"time"
 )
 
-// BaseNode provides common functionality for all nodes
-type BaseNode struct {
-	name        string
-	nodeType    string
-	status      NodeStatus
-	lastExecute time.Time
+// Base node
+
+type baseNode struct{ name string }
+
+func (b baseNode) Name() string { return b.name }
+
+// ActionFunc wraps a function as an Action node.
+
+type ActionFunc struct {
+	baseNode
+	Fn func(t TickContext) (Status, error)
 }
 
-// NewBaseNode creates a new base node
-func NewBaseNode(name, nodeType string) *BaseNode {
-	return &BaseNode{
-		name:     name,
-		nodeType: nodeType,
-		status:   StatusInvalid,
+func (a ActionFunc) Tick(t TickContext) (Status, error) { return a.Fn(t) }
+
+// ConditionFunc wraps a function as a Condition node.
+
+type ConditionFunc struct {
+	baseNode
+	Fn func(t TickContext) (bool, error)
+}
+
+func (c ConditionFunc) Tick(t TickContext) (Status, error) {
+	ok, err := c.Fn(t)
+	if err != nil {
+		return StatusFailure, err
 	}
-}
-
-// GetName returns the node name
-func (bn *BaseNode) GetName() string {
-	return bn.name
-}
-
-// GetType returns the node type
-func (bn *BaseNode) GetType() string {
-	return bn.nodeType
-}
-
-// Reset resets the node status
-func (bn *BaseNode) Reset() {
-	bn.status = StatusInvalid
-}
-
-// GetStatus returns the current status
-func (bn *BaseNode) GetStatus() NodeStatus {
-	return bn.status
-}
-
-// SetStatus sets the node status
-func (bn *BaseNode) SetStatus(status NodeStatus) {
-	bn.status = status
-	bn.lastExecute = time.Now()
-}
-
-// Sequence Node - executes children in order, fails on first failure
-type SequenceNode struct {
-	*BaseNode
-	children     []Node
-	currentChild int
-}
-
-// NewSequenceNode creates a new sequence node
-func NewSequenceNode(name string) *SequenceNode {
-	return &SequenceNode{
-		BaseNode:     NewBaseNode(name, "Sequence"),
-		children:     make([]Node, 0),
-		currentChild: 0,
+	if ok {
+		return StatusSuccess, nil
 	}
+	return StatusFailure, nil
 }
 
-// Execute runs the sequence logic
-func (sn *SequenceNode) Execute(ctx *ExecutionContext) NodeStatus {
-	if len(sn.children) == 0 {
-		sn.SetStatus(StatusSuccess)
-		return StatusSuccess
-	}
+// Sequence runs children until one fails; success if all succeed; running if a child is running.
 
-	for sn.currentChild < len(sn.children) {
-		child := sn.children[sn.currentChild]
-		status := child.Execute(ctx)
+type Sequence struct {
+	baseNode
+	children []BehaviorNode
+}
 
-		switch status {
+func NewSequence(name string, children ...BehaviorNode) *Sequence {
+	return &Sequence{baseNode: baseNode{name: name}, children: children}
+}
+
+func (s *Sequence) SetChildren(children ...BehaviorNode) { s.children = children }
+
+func (s *Sequence) Tick(t TickContext) (Status, error) {
+	for _, ch := range s.children {
+		st, err := ch.Tick(t)
+		if err != nil {
+			return StatusFailure, err
+		}
+		switch st {
 		case StatusFailure:
-			sn.Reset()
-			sn.SetStatus(StatusFailure)
-			return StatusFailure
+			return StatusFailure, nil
 		case StatusRunning:
-			sn.SetStatus(StatusRunning)
-			return StatusRunning
-		case StatusSuccess:
-			sn.currentChild++
-			continue
+			return StatusRunning, nil
 		}
 	}
-
-	// All children succeeded
-	sn.Reset()
-	sn.SetStatus(StatusSuccess)
-	return StatusSuccess
+	return StatusSuccess, nil
 }
 
-// AddChild adds a child node
-func (sn *SequenceNode) AddChild(child Node) {
-	sn.children = append(sn.children, child)
+// Selector runs children until one succeeds; failure if all fail; running if a child is running.
+
+type Selector struct {
+	baseNode
+	children []BehaviorNode
 }
 
-// GetChildren returns all children
-func (sn *SequenceNode) GetChildren() []Node {
-	return sn.children
+func NewSelector(name string, children ...BehaviorNode) *Selector {
+	return &Selector{baseNode: baseNode{name: name}, children: children}
 }
 
-// RemoveChild removes a child node
-func (sn *SequenceNode) RemoveChild(child Node) bool {
-	for i, c := range sn.children {
-		if c == child {
-			sn.children = append(sn.children[:i], sn.children[i+1:]...)
-			return true
+func (s *Selector) SetChildren(children ...BehaviorNode) { s.children = children }
+
+func (s *Selector) Tick(t TickContext) (Status, error) {
+	var lastErr error
+	for _, ch := range s.children {
+		st, err := ch.Tick(t)
+		if err != nil {
+			lastErr = err
 		}
-	}
-	return false
-}
-
-// Reset resets the sequence node
-func (sn *SequenceNode) Reset() {
-	sn.BaseNode.Reset()
-	sn.currentChild = 0
-	for _, child := range sn.children {
-		child.Reset()
-	}
-}
-
-// Clone creates a copy of the sequence node
-func (sn *SequenceNode) Clone() Node {
-	clone := NewSequenceNode(sn.name)
-	for _, child := range sn.children {
-		clone.AddChild(child.Clone())
-	}
-	return clone
-}
-
-// Selector Node - executes children until one succeeds
-type SelectorNode struct {
-	*BaseNode
-	children     []Node
-	currentChild int
-}
-
-// NewSelectorNode creates a new selector node
-func NewSelectorNode(name string) *SelectorNode {
-	return &SelectorNode{
-		BaseNode:     NewBaseNode(name, "Selector"),
-		children:     make([]Node, 0),
-		currentChild: 0,
-	}
-}
-
-// Execute runs the selector logic
-func (sn *SelectorNode) Execute(ctx *ExecutionContext) NodeStatus {
-	if len(sn.children) == 0 {
-		sn.SetStatus(StatusFailure)
-		return StatusFailure
-	}
-
-	for sn.currentChild < len(sn.children) {
-		child := sn.children[sn.currentChild]
-		status := child.Execute(ctx)
-
-		switch status {
+		switch st {
 		case StatusSuccess:
-			sn.Reset()
-			sn.SetStatus(StatusSuccess)
-			return StatusSuccess
+			return StatusSuccess, err
 		case StatusRunning:
-			sn.SetStatus(StatusRunning)
-			return StatusRunning
-		case StatusFailure:
-			sn.currentChild++
-			continue
+			return StatusRunning, err
 		}
 	}
-
-	// All children failed
-	sn.Reset()
-	sn.SetStatus(StatusFailure)
-	return StatusFailure
+	return StatusFailure, lastErr
 }
 
-// AddChild adds a child node
-func (sn *SelectorNode) AddChild(child Node) {
-	sn.children = append(sn.children, child)
+// Parallel executes all children and returns based on a policy.
+
+type ParallelPolicy int
+
+const (
+	ParallelRequireAllSuccess ParallelPolicy = iota
+	ParallelRequireOneSuccess
+)
+
+type Parallel struct {
+	baseNode
+	children []BehaviorNode
+	policy   ParallelPolicy
 }
 
-// GetChildren returns all children
-func (sn *SelectorNode) GetChildren() []Node {
-	return sn.children
+func NewParallel(name string, policy ParallelPolicy, children ...BehaviorNode) *Parallel {
+	return &Parallel{baseNode: baseNode{name: name}, policy: policy, children: children}
 }
 
-// RemoveChild removes a child node
-func (sn *SelectorNode) RemoveChild(child Node) bool {
-	for i, c := range sn.children {
-		if c == child {
-			sn.children = append(sn.children[:i], sn.children[i+1:]...)
-			return true
+func (p *Parallel) SetChildren(children ...BehaviorNode) { p.children = children }
+
+func (p *Parallel) Tick(t TickContext) (Status, error) {
+	if len(p.children) == 0 {
+		return StatusSuccess, nil
+	}
+	successes := 0
+	var anyRunning bool
+	var allErr error
+	for _, ch := range p.children {
+		st, err := ch.Tick(t)
+		if err != nil {
+			if allErr == nil {
+				allErr = err
+			} else {
+				allErr = errors.Join(allErr, err)
+			}
 		}
-	}
-	return false
-}
-
-// Reset resets the selector node
-func (sn *SelectorNode) Reset() {
-	sn.BaseNode.Reset()
-	sn.currentChild = 0
-	for _, child := range sn.children {
-		child.Reset()
-	}
-}
-
-// Clone creates a copy of the selector node
-func (sn *SelectorNode) Clone() Node {
-	clone := NewSelectorNode(sn.name)
-	for _, child := range sn.children {
-		clone.AddChild(child.Clone())
-	}
-	return clone
-}
-
-// Parallel Node - executes all children simultaneously
-type ParallelNode struct {
-	*BaseNode
-	children       []Node
-	successPolicy  int // number of children that must succeed
-	failurePolicy  int // number of children that must fail
-	childrenStatus []NodeStatus
-}
-
-// NewParallelNode creates a new parallel node
-func NewParallelNode(name string, successPolicy, failurePolicy int) *ParallelNode {
-	return &ParallelNode{
-		BaseNode:       NewBaseNode(name, "Parallel"),
-		children:       make([]Node, 0),
-		successPolicy:  successPolicy,
-		failurePolicy:  failurePolicy,
-		childrenStatus: make([]NodeStatus, 0),
-	}
-}
-
-// Execute runs the parallel logic
-func (pn *ParallelNode) Execute(ctx *ExecutionContext) NodeStatus {
-	if len(pn.children) == 0 {
-		pn.SetStatus(StatusSuccess)
-		return StatusSuccess
-	}
-
-	// Initialize status array if needed
-	if len(pn.childrenStatus) != len(pn.children) {
-		pn.childrenStatus = make([]NodeStatus, len(pn.children))
-	}
-
-	successCount := 0
-	failureCount := 0
-	runningCount := 0
-
-	// Execute all children
-	for i, child := range pn.children {
-		if pn.childrenStatus[i] == StatusRunning || pn.childrenStatus[i] == StatusInvalid {
-			pn.childrenStatus[i] = child.Execute(ctx)
-		}
-
-		switch pn.childrenStatus[i] {
+		switch st {
 		case StatusSuccess:
-			successCount++
-		case StatusFailure:
-			failureCount++
+			successes++
 		case StatusRunning:
-			runningCount++
+			anyRunning = true
 		}
 	}
-
-	// Check policies
-	if successCount >= pn.successPolicy {
-		pn.SetStatus(StatusSuccess)
-		return StatusSuccess
+	switch p.policy {
+	case ParallelRequireAllSuccess:
+		if successes == len(p.children) {
+			return StatusSuccess, allErr
+		}
+		if anyRunning {
+			return StatusRunning, allErr
+		}
+		return StatusFailure, allErr
+	case ParallelRequireOneSuccess:
+		if successes > 0 {
+			return StatusSuccess, allErr
+		}
+		if anyRunning {
+			return StatusRunning, allErr
+		}
+		return StatusFailure, allErr
+	default:
+		return StatusFailure, errors.New("unknown parallel policy")
 	}
+}
 
-	if failureCount >= pn.failurePolicy {
-		pn.SetStatus(StatusFailure)
-		return StatusFailure
+// Repeat decorator repeats its child a fixed number of times or until failure.
+
+type Repeat struct {
+	baseNode
+	child BehaviorNode
+	Times int
+	// StopOnFailure stops repeating on failure when true.
+	StopOnFailure bool
+}
+
+func NewRepeat(name string, times int, stopOnFailure bool) *Repeat {
+	return &Repeat{baseNode: baseNode{name: name}, Times: times, StopOnFailure: stopOnFailure}
+}
+
+func (r *Repeat) SetChild(child BehaviorNode) { r.child = child }
+
+func (r *Repeat) Tick(t TickContext) (Status, error) {
+	if r.child == nil {
+		return StatusFailure, errors.New("repeat: child is nil")
 	}
-
-	pn.SetStatus(StatusRunning)
-	return StatusRunning
-}
-
-// AddChild adds a child node
-func (pn *ParallelNode) AddChild(child Node) {
-	pn.children = append(pn.children, child)
-	pn.childrenStatus = append(pn.childrenStatus, StatusInvalid)
-}
-
-// GetChildren returns all children
-func (pn *ParallelNode) GetChildren() []Node {
-	return pn.children
-}
-
-// RemoveChild removes a child node
-func (pn *ParallelNode) RemoveChild(child Node) bool {
-	for i, c := range pn.children {
-		if c == child {
-			pn.children = append(pn.children[:i], pn.children[i+1:]...)
-			pn.childrenStatus = append(pn.childrenStatus[:i], pn.childrenStatus[i+1:]...)
-			return true
+	for i := 0; i < r.Times; i++ {
+		st, err := r.child.Tick(t)
+		if err != nil {
+			return StatusFailure, err
+		}
+		if st == StatusRunning {
+			return StatusRunning, nil
+		}
+		if st == StatusFailure && r.StopOnFailure {
+			return StatusFailure, nil
 		}
 	}
-	return false
+	return StatusSuccess, nil
 }
 
-// Reset resets the parallel node
-func (pn *ParallelNode) Reset() {
-	pn.BaseNode.Reset()
-	for i := range pn.childrenStatus {
-		pn.childrenStatus[i] = StatusInvalid
-	}
-	for _, child := range pn.children {
-		child.Reset()
-	}
+// Timer decorator limits child execution by duration; returns Running until timeout, then child's status.
+
+type Timer struct {
+	baseNode
+	child    BehaviorNode
+	Duration time.Duration
+	// in Blackboard we store start time under key name+".start"
 }
 
-// Clone creates a copy of the parallel node
-func (pn *ParallelNode) Clone() Node {
-	clone := NewParallelNode(pn.name, pn.successPolicy, pn.failurePolicy)
-	for _, child := range pn.children {
-		clone.AddChild(child.Clone())
-	}
-	return clone
+func NewTimer(name string, d time.Duration) *Timer {
+	return &Timer{baseNode: baseNode{name: name}, Duration: d}
 }
 
-// Inverter Node - inverts the result of its child
-type InverterNode struct {
-	*BaseNode
-	child Node
+func (d *Timer) SetChild(child BehaviorNode) { d.child = child }
+
+func (d *Timer) Tick(t TickContext) (Status, error) {
+	if d.child == nil {
+		return StatusFailure, errors.New("timer: child is nil")
+	}
+	key := d.name + ".start"
+	val, ok := t.BB.Get(key)
+	now := t.Clock()
+	if !ok {
+		t.BB.Set(key, now)
+		return StatusRunning, nil
+	}
+	start, _ := val.(time.Time)
+	if now.Sub(start) < d.Duration {
+		return StatusRunning, nil
+	}
+	// time's up – run child once
+	st, err := d.child.Tick(t)
+	// cleanup start key for next cycles
+	t.BB.Delete(key)
+	return st, err
 }
 
-// NewInverterNode creates a new inverter node
-func NewInverterNode(name string) *InverterNode {
-	return &InverterNode{
-		BaseNode: NewBaseNode(name, "Inverter"),
-	}
+// Probability decorator succeeds based on chance before executing child; otherwise fails fast.
+
+type Probability struct {
+	baseNode
+	child BehaviorNode
+	P     float64
+	rand  *rand.Rand
 }
 
-// Execute runs the inverter logic
-func (in *InverterNode) Execute(ctx *ExecutionContext) NodeStatus {
-	if in.child == nil {
-		in.SetStatus(StatusFailure)
-		return StatusFailure
+func NewProbability(name string, p float64) *Probability {
+	return &Probability{baseNode: baseNode{name: name}, P: p, rand: rand.New(rand.NewSource(time.Now().UnixNano()))}
+}
+
+func (p *Probability) SetChild(child BehaviorNode) { p.child = child }
+
+func (p *Probability) Tick(t TickContext) (Status, error) {
+	if p.child == nil {
+		return StatusFailure, errors.New("probability: child is nil")
 	}
+	if p.P <= 0 {
+		return StatusFailure, nil
+	}
+	if p.P >= 1 {
+		return p.child.Tick(t)
+	}
+	if p.rand.Float64() <= p.P {
+		return p.child.Tick(t)
+	}
+	return StatusFailure, nil
+}
 
-	status := in.child.Execute(ctx)
+// Inverter decorator flips Success <-> Failure; Running passes through.
 
-	switch status {
+type Inverter struct {
+	baseNode
+	child BehaviorNode
+}
+
+func NewInverter(name string) *Inverter { return &Inverter{baseNode: baseNode{name: name}} }
+
+func (d *Inverter) SetChild(child BehaviorNode) { d.child = child }
+
+func (d *Inverter) Tick(t TickContext) (Status, error) {
+	if d.child == nil {
+		return StatusFailure, errors.New("inverter: child is nil")
+	}
+	st, err := d.child.Tick(t)
+	switch st {
 	case StatusSuccess:
-		in.SetStatus(StatusFailure)
-		return StatusFailure
+		return StatusFailure, err
 	case StatusFailure:
-		in.SetStatus(StatusSuccess)
-		return StatusSuccess
-	case StatusRunning:
-		in.SetStatus(StatusRunning)
-		return StatusRunning
+		return StatusSuccess, err
 	default:
-		in.SetStatus(StatusFailure)
-		return StatusFailure
+		return st, err
 	}
 }
 
-// SetChild sets the child node
-func (in *InverterNode) SetChild(child Node) {
-	in.child = child
+// Succeeder decorator always returns Success unless Running; Running passes through.
+
+type Succeeder struct {
+	baseNode
+	child BehaviorNode
 }
 
-// GetChild returns the child node
-func (in *InverterNode) GetChild() Node {
-	return in.child
-}
+func NewSucceeder(name string) *Succeeder { return &Succeeder{baseNode: baseNode{name: name}} }
 
-// Reset resets the inverter node
-func (in *InverterNode) Reset() {
-	in.BaseNode.Reset()
-	if in.child != nil {
-		in.child.Reset()
+func (d *Succeeder) SetChild(child BehaviorNode) { d.child = child }
+
+func (d *Succeeder) Tick(t TickContext) (Status, error) {
+	if d.child == nil {
+		return StatusSuccess, nil
 	}
-}
-
-// Clone creates a copy of the inverter node
-func (in *InverterNode) Clone() Node {
-	clone := NewInverterNode(in.name)
-	if in.child != nil {
-		clone.SetChild(in.child.Clone())
+	st, err := d.child.Tick(t)
+	if st == StatusRunning {
+		return StatusRunning, err
 	}
-	return clone
+	return StatusSuccess, err
 }
 
-// Repeater Node - repeats its child a specified number of times
-type RepeaterNode struct {
-	*BaseNode
-	child       Node
-	maxRepeats  int
-	currentRuns int
+// Cooldown decorator prevents executing child until a duration elapsed since last allowed run.
+// If cooling down, returns Failure so selectors can try alternatives.
+// Params: Duration; SuccessOnly (when true, only set cooldown after child succeeded).
+
+type Cooldown struct {
+	baseNode
+	child       BehaviorNode
+	Duration    time.Duration
+	SuccessOnly bool
 }
 
-// NewRepeaterNode creates a new repeater node
-func NewRepeaterNode(name string, maxRepeats int) *RepeaterNode {
-	return &RepeaterNode{
-		BaseNode:    NewBaseNode(name, "Repeater"),
-		maxRepeats:  maxRepeats,
-		currentRuns: 0,
+func NewCooldown(name string, d time.Duration, successOnly bool) *Cooldown {
+	return &Cooldown{baseNode: baseNode{name: name}, Duration: d, SuccessOnly: successOnly}
+}
+
+func (d *Cooldown) SetChild(child BehaviorNode) { d.child = child }
+
+func (d *Cooldown) Tick(t TickContext) (Status, error) {
+	if d.child == nil {
+		return StatusFailure, errors.New("cooldown: child is nil")
 	}
-}
-
-// Execute runs the repeater logic
-func (rn *RepeaterNode) Execute(ctx *ExecutionContext) NodeStatus {
-	if rn.child == nil {
-		rn.SetStatus(StatusFailure)
-		return StatusFailure
-	}
-
-	if rn.maxRepeats > 0 && rn.currentRuns >= rn.maxRepeats {
-		rn.SetStatus(StatusSuccess)
-		return StatusSuccess
-	}
-
-	status := rn.child.Execute(ctx)
-
-	switch status {
-	case StatusSuccess, StatusFailure:
-		rn.currentRuns++
-		rn.child.Reset()
-
-		if rn.maxRepeats > 0 && rn.currentRuns >= rn.maxRepeats {
-			rn.SetStatus(StatusSuccess)
-			return StatusSuccess
-		}
-
-		rn.SetStatus(StatusRunning)
-		return StatusRunning
-	case StatusRunning:
-		rn.SetStatus(StatusRunning)
-		return StatusRunning
-	default:
-		rn.SetStatus(StatusFailure)
-		return StatusFailure
-	}
-}
-
-// SetChild sets the child node
-func (rn *RepeaterNode) SetChild(child Node) {
-	rn.child = child
-}
-
-// GetChild returns the child node
-func (rn *RepeaterNode) GetChild() Node {
-	return rn.child
-}
-
-// Reset resets the repeater node
-func (rn *RepeaterNode) Reset() {
-	rn.BaseNode.Reset()
-	rn.currentRuns = 0
-	if rn.child != nil {
-		rn.child.Reset()
-	}
-}
-
-// Clone creates a copy of the repeater node
-func (rn *RepeaterNode) Clone() Node {
-	clone := NewRepeaterNode(rn.name, rn.maxRepeats)
-	if rn.child != nil {
-		clone.SetChild(rn.child.Clone())
-	}
-	return clone
-}
-
-// RandomSelector Node - randomly selects one child to execute
-type RandomSelectorNode struct {
-	*BaseNode
-	children []Node
-	rng      *rand.Rand
-}
-
-// NewRandomSelectorNode creates a new random selector node
-func NewRandomSelectorNode(name string) *RandomSelectorNode {
-	return &RandomSelectorNode{
-		BaseNode: NewBaseNode(name, "RandomSelector"),
-		children: make([]Node, 0),
-		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
-}
-
-// Execute runs the random selector logic
-func (rsn *RandomSelectorNode) Execute(ctx *ExecutionContext) NodeStatus {
-	if len(rsn.children) == 0 {
-		rsn.SetStatus(StatusFailure)
-		return StatusFailure
-	}
-
-	// Select a random child
-	index := rsn.rng.Intn(len(rsn.children))
-	child := rsn.children[index]
-
-	status := child.Execute(ctx)
-	rsn.SetStatus(status)
-	return status
-}
-
-// AddChild adds a child node
-func (rsn *RandomSelectorNode) AddChild(child Node) {
-	rsn.children = append(rsn.children, child)
-}
-
-// GetChildren returns all children
-func (rsn *RandomSelectorNode) GetChildren() []Node {
-	return rsn.children
-}
-
-// RemoveChild removes a child node
-func (rsn *RandomSelectorNode) RemoveChild(child Node) bool {
-	for i, c := range rsn.children {
-		if c == child {
-			rsn.children = append(rsn.children[:i], rsn.children[i+1:]...)
-			return true
+	key := d.name + ".last"
+	now := t.Clock()
+	if v, ok := t.BB.Get(key); ok {
+		if last, ok2 := v.(time.Time); ok2 {
+			if now.Sub(last) < d.Duration {
+				return StatusFailure, nil
+			}
 		}
 	}
-	return false
-}
-
-// Reset resets the random selector node
-func (rsn *RandomSelectorNode) Reset() {
-	rsn.BaseNode.Reset()
-	for _, child := range rsn.children {
-		child.Reset()
+	st, err := d.child.Tick(t)
+	if d.SuccessOnly {
+		if st == StatusSuccess {
+			t.BB.Set(key, now)
+		}
+	} else {
+		// set cooldown on any terminal status (not Running)
+		if st != StatusRunning {
+			t.BB.Set(key, now)
+		}
 	}
+	return st, err
 }
 
-// Clone creates a copy of the random selector node
-func (rsn *RandomSelectorNode) Clone() Node {
-	clone := NewRandomSelectorNode(rsn.name)
-	for _, child := range rsn.children {
-		clone.AddChild(child.Clone())
+// Tree is a simple DecisionTree implementation with a root node.
+
+type Tree struct{ root BehaviorNode }
+
+func (t Tree) Root() BehaviorNode { return t.root }
+
+func (t Tree) Tick(tc TickContext) (Status, error) {
+	if t.root == nil {
+		return StatusSuccess, nil
 	}
-	return clone
-}
-
-// ConditionNode represents a basic condition check
-type BasicConditionNode struct {
-	*BaseNode
-	conditionFunc func(*ExecutionContext) bool
-}
-
-// NewBasicConditionNode creates a new basic condition node
-func NewBasicConditionNode(name string, conditionFunc func(*ExecutionContext) bool) *BasicConditionNode {
-	return &BasicConditionNode{
-		BaseNode:      NewBaseNode(name, "Condition"),
-		conditionFunc: conditionFunc,
-	}
-}
-
-// Execute runs the condition check
-func (bcn *BasicConditionNode) Execute(ctx *ExecutionContext) NodeStatus {
-	if bcn.conditionFunc == nil {
-		bcn.SetStatus(StatusFailure)
-		return StatusFailure
-	}
-
-	if bcn.conditionFunc(ctx) {
-		bcn.SetStatus(StatusSuccess)
-		return StatusSuccess
-	}
-
-	bcn.SetStatus(StatusFailure)
-	return StatusFailure
-}
-
-// Evaluate evaluates the condition
-func (bcn *BasicConditionNode) Evaluate(ctx *ExecutionContext) bool {
-	if bcn.conditionFunc == nil {
-		return false
-	}
-	return bcn.conditionFunc(ctx)
-}
-
-// Clone creates a copy of the condition node
-func (bcn *BasicConditionNode) Clone() Node {
-	return NewBasicConditionNode(bcn.name, bcn.conditionFunc)
-}
-
-// ActionNode represents a basic action
-type BasicActionNode struct {
-	*BaseNode
-	actionFunc func(*ExecutionContext) NodeStatus
-}
-
-// NewBasicActionNode creates a new basic action node
-func NewBasicActionNode(name string, actionFunc func(*ExecutionContext) NodeStatus) *BasicActionNode {
-	return &BasicActionNode{
-		BaseNode:   NewBaseNode(name, "Action"),
-		actionFunc: actionFunc,
-	}
-}
-
-// Execute runs the action
-func (ban *BasicActionNode) Execute(ctx *ExecutionContext) NodeStatus {
-	if ban.actionFunc == nil {
-		ban.SetStatus(StatusFailure)
-		return StatusFailure
-	}
-
-	status := ban.actionFunc(ctx)
-	ban.SetStatus(status)
-	return status
-}
-
-// CanExecute checks if the action can be executed
-func (ban *BasicActionNode) CanExecute(ctx *ExecutionContext) bool {
-	return ban.actionFunc != nil
-}
-
-// Clone creates a copy of the action node
-func (ban *BasicActionNode) Clone() Node {
-	return NewBasicActionNode(ban.name, ban.actionFunc)
+	return t.root.Tick(tc)
 }

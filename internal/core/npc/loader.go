@@ -1,4 +1,4 @@
-package npcv2
+package npc
 
 import (
 	"encoding/json"
@@ -222,5 +222,27 @@ func RegisterBuiltins(r Registry) {
 			ms = int(fv)
 		}
 		return NewTimer("Timer", time.Duration(ms)*time.Millisecond), nil
+	})
+	// Inverter
+	r.RegisterDecorator("Inverter", func(params map[string]any) (Decorator, error) {
+		return NewInverter("Inverter"), nil
+	})
+	// Succeeder
+	r.RegisterDecorator("Succeeder", func(params map[string]any) (Decorator, error) {
+		return NewSucceeder("Succeeder"), nil
+	})
+	// Cooldown
+	r.RegisterDecorator("Cooldown", func(params map[string]any) (Decorator, error) {
+		ms := 0
+		if v, ok := params["ms"].(int); ok {
+			ms = v
+		} else if fv, ok := params["ms"].(float64); ok {
+			ms = int(fv)
+		}
+		successOnly := true
+		if v, ok := params["success_only"].(bool); ok {
+			successOnly = v
+		}
+		return NewCooldown("Cooldown", time.Duration(ms)*time.Millisecond, successOnly), nil
 	})
 }

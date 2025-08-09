@@ -2,291 +2,147 @@ package npc
 
 import (
 	"context"
+	"encoding/json"
 	"time"
+
+	bus "github.com/zeusync/zeusync/internal/core/events/bus"
 )
 
-// NodeStatus represents the execution status of a behavior tree node
-type NodeStatus int
+// Status represents the execution result of a behavior node tick.
+// It allows the tree to control flow and asynchronous-like waiting.
+type Status int
 
 const (
-	StatusSuccess NodeStatus = iota
+	StatusSuccess Status = iota
 	StatusFailure
 	StatusRunning
-	StatusInvalid
 )
 
-func (s NodeStatus) String() string {
-	switch s {
-	case StatusSuccess:
-		return "Success"
-	case StatusFailure:
-		return "Failure"
-	case StatusRunning:
-		return "Running"
-	default:
-		return "Invalid"
-	}
+// Blackboard is a centralized, thread-safe storage for agent state and shared data.
+// It supports namespaced keys, typed access, and persistence.
+type Blackboard interface {
+	// Get retrieves a value by key. Returns (nil, false) if absent.
+	Get(key string) (any, bool)
+	// Set assigns a value by key.
+	Set(key string, value any)
+	// Delete removes a value by key.
+	Delete(key string)
+	// Namespace returns a namespaced view of the blackboard using prefix"ns:" semantics.
+	Namespace(ns string) Blackboard
+	// Keys returns a snapshot of existing keys.
+	Keys() []string
+	// MarshalBinary persists the current state into compact binary bytes (default codec: gob).
+	MarshalBinary() ([]byte, error)
+	// UnmarshalBinary restores the state from compact binary bytes.
+	UnmarshalBinary(b []byte) error
 }
 
-// ExecutionContext contains the context for node execution
-type ExecutionContext struct {
-	Context    context.Context
-	Blackboard *Blackboard
-	Agent      Agent
-	DeltaTime  time.Duration
-}
-
-// Node represents a single node in the behavior tree
-type Node interface {
-	// Execute runs the node logic and returns the status
-	Execute(ctx *ExecutionContext) NodeStatus
-
-	// GetType returns the type of the node
-	GetType() string
-
-	// GetName returns the name/identifier of the node
-	GetName() string
-
-	// Reset resets the node to its initial state
-	Reset()
-
-	// Clone creates a copy of the node
-	Clone() Node
-}
-
-// CompositeNode represents a node that can have children
-type CompositeNode interface {
-	Node
-
-	// AddChild adds a child node
-	AddChild(child Node)
-
-	// GetChildren returns all child nodes
-	GetChildren() []Node
-
-	// RemoveChild removes a child node
-	RemoveChild(child Node) bool
-}
-
-// DecoratorNode represents a node that modifies the behavior of a single child
-type DecoratorNode interface {
-	Node
-
-	// SetChild sets the child node
-	SetChild(child Node)
-
-	// GetChild returns the child node
-	GetChild() Node
-}
-
-// ActionNode represents a leaf node that performs an action
-type ActionNode interface {
-	Node
-
-	// CanExecute checks if the action can be executed
-	CanExecute(ctx *ExecutionContext) bool
-}
-
-// ConditionNode represents a leaf node that checks a condition
-type ConditionNode interface {
-	Node
-
-	// Evaluate evaluates the condition
-	Evaluate(ctx *ExecutionContext) bool
-}
-
-// Sensor represents a component that gathers information from the environment
-type Sensor interface {
-	// GetName returns the sensor name
-	GetName() string
-
-	// Update updates the sensor data and writes to blackboard
-	Update(ctx *ExecutionContext) error
-
-	// IsEnabled returns whether the sensor is active
-	IsEnabled() bool
-
-	// SetEnabled enables or disables the sensor
-	SetEnabled(enabled bool)
-
-	// GetUpdateInterval returns how often the sensor should update
-	GetUpdateInterval() time.Duration
-}
-
-// Memory represents the agent's memory system
+// Memory stores decisions history and provides persistence for agent memory between runs.
 type Memory interface {
-	// Store saves data to memory
-	Store(key string, value interface{}) error
-
-	// Retrieve gets data from memory
-	Retrieve(key string) (interface{}, bool)
-
-	// Remember adds an experience/event to memory
-	Remember(event MemoryEvent) error
-
-	// Recall retrieves experiences based on criteria
-	Recall(criteria MemoryCriteria) ([]MemoryEvent, error)
-
-	// Forget removes data from memory
-	Forget(key string) error
-
-	// Clear clears all memory
-	Clear() error
-
-	// Save exports memory to persistent storage
-	Save() ([]byte, error)
-
-	// Load imports memory from persistent storage
-	Load(data []byte) error
-}
-
-// MemoryEvent represents a single memory event
-type MemoryEvent struct {
-	ID         string                 `json:"id"`
-	Type       string                 `json:"type"`
-	Timestamp  time.Time              `json:"timestamp"`
-	Data       map[string]interface{} `json:"data"`
-	Importance float64                `json:"importance"`
-	Tags       []string               `json:"tags"`
-}
-
-// MemoryCriteria defines criteria for memory recall
-type MemoryCriteria struct {
-	Type       string                 `json:"type,omitempty"`
-	Tags       []string               `json:"tags,omitempty"`
-	TimeRange  *TimeRange             `json:"time_range,omitempty"`
-	Importance *float64               `json:"min_importance,omitempty"`
-	Limit      int                    `json:"limit,omitempty"`
-	Data       map[string]interface{} `json:"data,omitempty"`
-}
-
-// TimeRange represents a time range for memory queries
-type TimeRange struct {
-	Start time.Time `json:"start"`
-	End   time.Time `json:"end"`
-}
-
-// EventHandler handles events in the agent system
-type EventHandler interface {
-	// GetEventType returns the type of events this handler processes
-	GetEventType() string
-
-	// Handle processes an event
-	Handle(ctx *ExecutionContext, event Event) error
-
-	// GetPriority returns the handler priority (higher = more important)
-	GetPriority() int
-}
-
-// Event represents an event in the system
-type Event struct {
-	ID        string                 `json:"id"`
-	Type      string                 `json:"type"`
-	Source    string                 `json:"source"`
-	Target    string                 `json:"target,omitempty"`
-	Timestamp time.Time              `json:"timestamp"`
-	Data      map[string]interface{} `json:"data"`
-	Priority  int                    `json:"priority"`
-}
-
-// Agent represents an AI agent
-type Agent interface {
-	// GetID returns the agent's unique identifier
-	GetID() string
-
-	// GetName returns the agent's name
-	GetName() string
-
-	// GetBlackboard returns the agent's blackboard
-	GetBlackboard() *Blackboard
-
-	// GetMemory returns the agent's memory system
-	GetMemory() Memory
-
-	// Update updates the agent (called each frame/tick)
-	Update(ctx context.Context, deltaTime time.Duration) error
-
-	// HandleEvent processes an event
-	HandleEvent(event Event) error
-
-	// AddSensor adds a sensor to the agent
-	AddSensor(sensor Sensor)
-
-	// RemoveSensor removes a sensor from the agent
-	RemoveSensor(sensorName string) bool
-
-	// GetSensors returns all sensors
-	GetSensors() []Sensor
-
-	// SetBehaviorTree sets the agent's behavior tree
-	SetBehaviorTree(root Node)
-
-	// GetBehaviorTree returns the agent's behavior tree
-	GetBehaviorTree() Node
-
-	// Save exports the agent's state
-	Save() ([]byte, error)
-
-	// Load imports the agent's state
-	Load(data []byte) error
-
-	// Reset resets the agent to initial state
+	// AppendDecision appends a decision record.
+	AppendDecision(rec DecisionRecord)
+	// History returns a copy snapshot of the decision history.
+	History() []DecisionRecord
+	// Reset clears all history.
 	Reset()
-
-	// IsActive returns whether the agent is active
-	IsActive() bool
-
-	// SetActive sets the agent's active state
-	SetActive(active bool)
+	// Save serializes memory to a compact binary representation (default codec: gob).
+	Save() ([]byte, error)
+	// Load de-serializes memory from a compact binary representation.
+	Load(b []byte) error
 }
 
-// BehaviorTreeBuilder helps build behavior trees from configuration
-type BehaviorTreeBuilder interface {
-	// BuildFromConfig creates a behavior tree from configuration
-	BuildFromConfig(config *BehaviorTreeConfig) (Node, error)
-
-	// RegisterNodeType registers a custom node type
-	RegisterNodeType(nodeType string, factory NodeFactory)
-
-	// GetRegisteredTypes returns all registered node types
-	GetRegisteredTypes() []string
+// TickContext is a context passed into nodes during Tick.
+// It includes standard context plus shortcuts to blackboard and time.
+type TickContext struct {
+	Ctx    context.Context
+	BB     Blackboard
+	Memory Memory
+	Clock  func() time.Time
 }
 
-// NodeFactory creates nodes of a specific type
-type NodeFactory interface {
-	// CreateNode creates a new node instance
-	CreateNode(config *NodeConfig) (Node, error)
-
-	// GetNodeType returns the type of nodes this factory creates
-	GetNodeType() string
+// BehaviorNode is the fundamental interface for behavior tree nodes.
+// Implementations must be stateless w.r.t. shared instances or keep per-agent state in Blackboard/Memory.
+type BehaviorNode interface {
+	// Tick executes one step of the node and returns a Status.
+	// Implementations should avoid panics and return errors via blackboard or wrapping actions if needed.
+	Tick(t TickContext) (Status, error)
+	// Name returns a human-readable name for debugging and history.
+	Name() string
 }
 
-// AgentManager manages multiple agents
-type AgentManager interface {
-	// CreateAgent creates a new agent
-	CreateAgent(config *AgentConfig) (Agent, error)
+// Action performs side effects and returns status based on Blackboard state.
+type Action interface {
+	BehaviorNode
+}
 
-	// GetAgent retrieves an agent by ID
-	GetAgent(id string) (Agent, bool)
+// Condition evaluates to success/failure based on Blackboard state.
+type Condition interface {
+	BehaviorNode
+}
 
-	// RemoveAgent removes an agent
-	RemoveAgent(id string) bool
+// Decorator wraps a single child node and changes behavior (repeaters, timers, probability, etc.).
+type Decorator interface {
+	BehaviorNode
+	SetChild(child BehaviorNode)
+}
 
-	// GetAllAgents returns all agents
-	GetAllAgents() []Agent
+// Composite node manages multiple children (sequence, selector, parallel).
+type Composite interface {
+	BehaviorNode
+	SetChildren(children ...BehaviorNode)
+}
 
-	// Update updates all agents
-	Update(ctx context.Context, deltaTime time.Duration) error
+// Sensor pulls data from the external world and writes it to Blackboard.
+type Sensor interface {
+	// Name is used for registry and debugging.
+	Name() string
+	// Update is called each tick cycle to refresh Blackboard state.
+	Update(ctx context.Context, bb Blackboard) error
+}
 
-	// BroadcastEvent sends an event to all agents
-	BroadcastEvent(event Event) error
+// DecisionTree is a wrapper that holds a root node and exposes Tick.
+type DecisionTree interface {
+	Root() BehaviorNode
+	Tick(t TickContext) (Status, error)
+}
 
-	// SendEvent sends an event to a specific agent
-	SendEvent(agentID string, event Event) error
+// Registry allows plug-and-play modules to be registered by name.
+// It decouples configuration from concrete implementations.
+type Registry interface {
+	RegisterAction(name string, factory func(params map[string]any) (Action, error))
+	RegisterCondition(name string, factory func(params map[string]any) (Condition, error))
+	RegisterDecorator(name string, factory func(params map[string]any) (Decorator, error))
+	RegisterComposite(name string, factory func(params map[string]any) (Composite, error))
+	RegisterSensor(name string, factory func(params map[string]any) (Sensor, error))
 
-	// SaveAll saves all agents' states
-	SaveAll() (map[string][]byte, error)
+	NewAction(name string, params map[string]any) (Action, error)
+	NewCondition(name string, params map[string]any) (Condition, error)
+	NewDecorator(name string, params map[string]any) (Decorator, error)
+	NewComposite(name string, params map[string]any) (Composite, error)
+	NewSensor(name string, params map[string]any) (Sensor, error)
+}
 
-	// LoadAll loads all agents' states
-	LoadAll(data map[string][]byte) error
+// Agent coordinates sensors, decision tree, memory, blackboard, and events.
+type Agent interface {
+	// Step performs one cycle: sensors -> tree -> history.
+	Step(ctx context.Context) (Status, error)
+	// Blackboard returns the agent blackboard.
+	Blackboard() Blackboard
+	// Memory returns the agent decision memory.
+	Memory() Memory
+	// Events returns the shared event bus.
+	Events() bus.EventBus
+	// SaveState returns a binary snapshot of agent state (blackboard + memory).
+	SaveState() ([]byte, error)
+	// LoadState restores agent state from a binary snapshot.
+	LoadState(b []byte) error
+}
+
+// DecisionRecord is used by Memory to keep audit logs of decisions and outcomes.
+type DecisionRecord struct {
+	Node      string          `json:"node"`
+	Status    Status          `json:"status"`
+	Duration  time.Duration   `json:"duration"`
+	Timestamp time.Time       `json:"ts"`
+	Metadata  json.RawMessage `json:"meta,omitempty"`
 }

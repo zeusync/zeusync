@@ -1,223 +1,110 @@
 package npc
 
 import (
-	"encoding/json"
-	"fmt"
+	"bytes"
+	"encoding/gob"
+	"sort"
+	"strings"
 	"sync"
-	"time"
 )
 
-// Blackboard represents the central data storage for AI agents
-// It stores all shared data that can be accessed by different modules
-type Blackboard struct {
-	mu   sync.RWMutex
-	data map[string]interface{}
-
-	// Metadata for tracking changes
-	lastUpdated map[string]time.Time
-	version     int64
+// bbMap is a thread-safe map-based blackboard implementation.
+type bbMap struct {
+	mu     sync.RWMutex
+	data   map[string]any
+	prefix string // for namespaces, empty for root
+	root   *bbMap // pointer to root map for namespaced views
 }
 
-// NewBlackboard creates a new blackboard instance
-func NewBlackboard() *Blackboard {
-	return &Blackboard{
-		data:        make(map[string]interface{}),
-		lastUpdated: make(map[string]time.Time),
-		version:     0,
+// NewBlackboard creates a new root blackboard.
+func NewBlackboard() Blackboard {
+	m := &bbMap{data: make(map[string]any)}
+	m.root = m
+	return m
+}
+
+func (b *bbMap) fullKey(key string) string {
+	if b.prefix == "" {
+		return key
 	}
+	return b.prefix + ":" + key
 }
 
-// Set stores a value in the blackboard
-func (bb *Blackboard) Set(key string, value interface{}) {
+func (b *bbMap) Get(key string) (any, bool) {
+	bb := b.root
+	full := b.fullKey(key)
+	bb.mu.RLock()
+	defer bb.mu.RUnlock()
+	v, ok := bb.data[full]
+	return v, ok
+}
+
+func (b *bbMap) Set(key string, value any) {
+	bb := b.root
+	full := b.fullKey(key)
 	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
-	bb.data[key] = value
-	bb.lastUpdated[key] = time.Now()
-	bb.version++
+	bb.data[full] = value
+	bb.mu.Unlock()
 }
 
-// Get retrieves a value from the blackboard
-func (bb *Blackboard) Get(key string) (interface{}, bool) {
-	bb.mu.RLock()
-	defer bb.mu.RUnlock()
-
-	value, exists := bb.data[key]
-	return value, exists
-}
-
-// GetString retrieves a string value from the blackboard
-func (bb *Blackboard) GetString(key string) (string, bool) {
-	value, exists := bb.Get(key)
-	if !exists {
-		return "", false
-	}
-
-	str, ok := value.(string)
-	return str, ok
-}
-
-// GetInt retrieves an int value from the blackboard
-func (bb *Blackboard) GetInt(key string) (int, bool) {
-	value, exists := bb.Get(key)
-	if !exists {
-		return 0, false
-	}
-
-	switch v := value.(type) {
-	case int:
-		return v, true
-	case float64:
-		return int(v), true
-	default:
-		return 0, false
-	}
-}
-
-// GetFloat retrieves a float64 value from the blackboard
-func (bb *Blackboard) GetFloat(key string) (float64, bool) {
-	value, exists := bb.Get(key)
-	if !exists {
-		return 0, false
-	}
-
-	switch v := value.(type) {
-	case float64:
-		return v, true
-	case int:
-		return float64(v), true
-	default:
-		return 0, false
-	}
-}
-
-// GetBool retrieves a boolean value from the blackboard
-func (bb *Blackboard) GetBool(key string) (bool, bool) {
-	value, exists := bb.Get(key)
-	if !exists {
-		return false, false
-	}
-
-	b, ok := value.(bool)
-	return b, ok
-}
-
-// Has checks if a key exists in the blackboard
-func (bb *Blackboard) Has(key string) bool {
-	bb.mu.RLock()
-	defer bb.mu.RUnlock()
-
-	_, exists := bb.data[key]
-	return exists
-}
-
-// Delete removes a key from the blackboard
-func (bb *Blackboard) Delete(key string) {
+func (b *bbMap) Delete(key string) {
+	bb := b.root
+	full := b.fullKey(key)
 	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
-	delete(bb.data, key)
-	delete(bb.lastUpdated, key)
-	bb.version++
+	delete(bb.data, full)
+	bb.mu.Unlock()
 }
 
-// Keys returns all keys in the blackboard
-func (bb *Blackboard) Keys() []string {
-	bb.mu.RLock()
-	defer bb.mu.RUnlock()
+func (b *bbMap) Namespace(ns string) Blackboard {
+	if strings.Contains(ns, ":") {
+		// sanitize nested prefix usage by replacing ':' with '_'
+		ns = strings.ReplaceAll(ns, ":", "_")
+	}
+	return &bbMap{root: b.root, prefix: ns}
+}
 
+func (b *bbMap) Keys() []string {
+	bb := b.root
+	bb.mu.RLock()
 	keys := make([]string, 0, len(bb.data))
-	for key := range bb.data {
-		keys = append(keys, key)
+	for k := range bb.data {
+		keys = append(keys, k)
 	}
-	return keys
+	bb.mu.RUnlock()
+	sort.Strings(keys)
+	if b.prefix == "" {
+		return keys
+	}
+	// filter by prefix and strip it
+	res := make([]string, 0)
+	pref := b.prefix + ":"
+	for _, k := range keys {
+		if strings.HasPrefix(k, pref) {
+			res = append(res, strings.TrimPrefix(k, pref))
+		}
+	}
+	return res
 }
 
-// GetVersion returns the current version of the blackboard
-func (bb *Blackboard) GetVersion() int64 {
+func (b *bbMap) MarshalBinary() ([]byte, error) {
+	bb := b.root
 	bb.mu.RLock()
 	defer bb.mu.RUnlock()
-
-	return bb.version
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(bb.data); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
-// GetLastUpdated returns the last update time for a key
-func (bb *Blackboard) GetLastUpdated(key string) (time.Time, bool) {
-	bb.mu.RLock()
-	defer bb.mu.RUnlock()
-
-	t, exists := bb.lastUpdated[key]
-	return t, exists
-}
-
-// Clear removes all data from the blackboard
-func (bb *Blackboard) Clear() {
+func (b *bbMap) UnmarshalBinary(data []byte) error {
+	bb := b.root
 	bb.mu.Lock()
 	defer bb.mu.Unlock()
-
-	bb.data = make(map[string]interface{})
-	bb.lastUpdated = make(map[string]time.Time)
-	bb.version++
-}
-
-// ToJSON exports the blackboard data to JSON
-func (bb *Blackboard) ToJSON() ([]byte, error) {
-	bb.mu.RLock()
-	defer bb.mu.RUnlock()
-
-	export := struct {
-		Data        map[string]interface{} `json:"data"`
-		LastUpdated map[string]time.Time   `json:"last_updated"`
-		Version     int64                  `json:"version"`
-	}{
-		Data:        bb.data,
-		LastUpdated: bb.lastUpdated,
-		Version:     bb.version,
+	if bb.data == nil {
+		bb.data = make(map[string]any)
 	}
-
-	return json.Marshal(export)
-}
-
-// FromJSON imports blackboard data from JSON
-func (bb *Blackboard) FromJSON(data []byte) error {
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
-	var export struct {
-		Data        map[string]interface{} `json:"data"`
-		LastUpdated map[string]time.Time   `json:"last_updated"`
-		Version     int64                  `json:"version"`
-	}
-
-	if err := json.Unmarshal(data, &export); err != nil {
-		return fmt.Errorf("failed to unmarshal blackboard data: %w", err)
-	}
-
-	bb.data = export.Data
-	bb.lastUpdated = export.LastUpdated
-	bb.version = export.Version
-
-	return nil
-}
-
-// Clone creates a deep copy of the blackboard
-func (bb *Blackboard) Clone() *Blackboard {
-	bb.mu.RLock()
-	defer bb.mu.RUnlock()
-
-	clone := NewBlackboard()
-
-	// Deep copy data
-	for key, value := range bb.data {
-		clone.data[key] = value
-	}
-
-	// Copy metadata
-	for key, t := range bb.lastUpdated {
-		clone.lastUpdated[key] = t
-	}
-
-	clone.version = bb.version
-
-	return clone
+	dec := gob.NewDecoder(bytes.NewReader(data))
+	return dec.Decode(&bb.data)
 }
