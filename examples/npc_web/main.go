@@ -12,8 +12,131 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	npc "github.com/zeusync/zeusync/internal/core/npc"
+	"github.com/zeusync/zeusync/internal/core/npc"
 )
+
+func main() {
+	rand.Seed(time.Now().UnixNano())
+	game := &Game{}
+	game.Restart()
+	hub := newHub()
+
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		cl := &wsClient{conn: c, send: make(chan []byte, 64)}
+		hub.add(cl)
+		defer func() { hub.remove(cl); _ = c.Close() }()
+		go func() {
+			for {
+				_, msg, err := c.ReadMessage()
+				if err != nil {
+					return
+				}
+				if string(msg) == "restart" {
+					game.Restart()
+				}
+			}
+		}()
+		for b := range cl.send {
+			if err := c.WriteMessage(websocket.TextMessage, b); err != nil {
+				return
+			}
+		}
+	})
+
+	http.HandleFunc("/restart", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		game.Restart()
+		w.WriteHeader(204)
+	})
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("examples/npc_web/static"))))
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "examples/npc_web/static/index.html")
+	})
+
+	go func() {
+		tick := 0
+		var prevHP, prevEnergy int
+		var lastStart time.Time
+		for {
+			game.mu.RLock()
+			bb := game.bb
+			world := game.world
+			agent := game.agent
+			start := game.startTime
+			game.mu.RUnlock()
+			st, err := agent.Step(context.Background())
+			if err != nil {
+				log.Println("step:", err)
+			}
+			grid := make([][]string, world.H)
+			for y := 0; y < world.H; y++ {
+				grid[y] = make([]string, world.W)
+				for x := 0; x < world.W; x++ {
+					grid[y][x] = world.Grid[y][x].String()
+				}
+			}
+			// compute metrics
+			keys := bb.Keys()
+			rem := 0
+			for _, k := range keys {
+				if strings.HasPrefix(k, "danger_") {
+					rem++
+				}
+			}
+			px := getInt(bb, "pos_x")
+			py := getInt(bb, "pos_y")
+			hp := getInt(bb, "hp")
+			energy := getInt(bb, "energy")
+			// reset prev on restart
+			if start != lastStart {
+				prevHP = hp
+				prevEnergy = energy
+				lastStart = start
+			}
+			events := make([]string, 0, 2)
+			if dh := prevHP - hp; dh > 0 {
+				events = append(events, fmt.Sprintf("-%d HP (trap)", dh))
+			}
+			if de := energy - prevEnergy; de > 0 {
+				events = append(events, fmt.Sprintf("+%d energy (artifact)", de))
+			}
+			prevHP = hp
+			prevEnergy = energy
+			outcome := ""
+			if world.TileAt(px, py) == Exit {
+				outcome = "success"
+			} else if hp <= 0 {
+				outcome = "dead"
+				// schedule auto-restart once
+				game.mu.Lock()
+				if !game.pendingRestart {
+					game.pendingRestart = true
+					go func() {
+						time.Sleep(1 * time.Second)
+						game.Restart()
+					}()
+				}
+				game.mu.Unlock()
+			}
+			elapsed := int(time.Since(start) / (80 * time.Millisecond))
+			frame := TickFrame{Tick: tick, Elapsed: elapsed, Status: fmt.Sprintf("%v", st), Outcome: outcome, PosX: px, PosY: py, HP: hp, Energy: energy, ExitVis: getBool(bb, "exit_visible"), Remembered: rem, Events: events, Grid: grid}
+			b, _ := json.Marshal(frame)
+			hub.broadcast(b)
+			tick++
+			time.Sleep(80 * time.Millisecond)
+		}
+	}()
+
+	log.Println("NPC web demo: http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
 
 type Tile int
 
@@ -491,127 +614,4 @@ type TickFrame struct {
 	Remembered int        `json:"remembered_traps"`
 	Events     []string   `json:"events,omitempty"`
 	Grid       [][]string `json:"grid"`
-}
-
-func main() {
-	rand.Seed(time.Now().UnixNano())
-	game := &Game{}
-	game.Restart()
-	hub := newHub()
-
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		c, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		cl := &wsClient{conn: c, send: make(chan []byte, 64)}
-		hub.add(cl)
-		defer func() { hub.remove(cl); c.Close() }()
-		go func() {
-			for {
-				_, msg, err := c.ReadMessage()
-				if err != nil {
-					return
-				}
-				if string(msg) == "restart" {
-					game.Restart()
-				}
-			}
-		}()
-		for b := range cl.send {
-			if err := c.WriteMessage(websocket.TextMessage, b); err != nil {
-				return
-			}
-		}
-	})
-
-	http.HandleFunc("/restart", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(405)
-			return
-		}
-		game.Restart()
-		w.WriteHeader(204)
-	})
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("examples/npc_web/static"))))
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "examples/npc_web/static/index.html")
-	})
-
-	go func() {
-		tick := 0
-		var prevHP, prevEnergy int
-		var lastStart time.Time
-		for {
-			game.mu.RLock()
-			bb := game.bb
-			world := game.world
-			agent := game.agent
-			start := game.startTime
-			game.mu.RUnlock()
-			st, err := agent.Step(context.Background())
-			if err != nil {
-				log.Println("step:", err)
-			}
-			grid := make([][]string, world.H)
-			for y := 0; y < world.H; y++ {
-				grid[y] = make([]string, world.W)
-				for x := 0; x < world.W; x++ {
-					grid[y][x] = world.Grid[y][x].String()
-				}
-			}
-			// compute metrics
-			keys := bb.Keys()
-			rem := 0
-			for _, k := range keys {
-				if strings.HasPrefix(k, "danger_") {
-					rem++
-				}
-			}
-			px := getInt(bb, "pos_x")
-			py := getInt(bb, "pos_y")
-			hp := getInt(bb, "hp")
-			energy := getInt(bb, "energy")
-			// reset prev on restart
-			if start != lastStart {
-				prevHP = hp
-				prevEnergy = energy
-				lastStart = start
-			}
-			events := make([]string, 0, 2)
-			if dh := prevHP - hp; dh > 0 {
-				events = append(events, fmt.Sprintf("-%d HP (trap)", dh))
-			}
-			if de := energy - prevEnergy; de > 0 {
-				events = append(events, fmt.Sprintf("+%d energy (artifact)", de))
-			}
-			prevHP = hp
-			prevEnergy = energy
-			outcome := ""
-			if world.TileAt(px, py) == Exit {
-				outcome = "success"
-			} else if hp <= 0 {
-				outcome = "dead"
-				// schedule auto-restart once
-				game.mu.Lock()
-				if !game.pendingRestart {
-					game.pendingRestart = true
-					go func() {
-						time.Sleep(1 * time.Second)
-						game.Restart()
-					}()
-				}
-				game.mu.Unlock()
-			}
-			elapsed := int(time.Since(start) / (80 * time.Millisecond))
-			frame := TickFrame{Tick: tick, Elapsed: elapsed, Status: fmt.Sprintf("%v", st), Outcome: outcome, PosX: px, PosY: py, HP: hp, Energy: energy, ExitVis: getBool(bb, "exit_visible"), Remembered: rem, Events: events, Grid: grid}
-			b, _ := json.Marshal(frame)
-			hub.broadcast(b)
-			tick++
-			time.Sleep(80 * time.Millisecond)
-		}
-	}()
-
-	log.Println("NPC web demo: http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
 }
