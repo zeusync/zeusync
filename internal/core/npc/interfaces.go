@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	bus "github.com/zeusync/zeusync/internal/core/events/bus"
+	"github.com/zeusync/zeusync/internal/core/events/bus"
 )
 
 // Status represents the execution result of a behavior node tick.
@@ -27,9 +27,9 @@ type Blackboard interface {
 	Set(key string, value any)
 	// Delete removes a value by key.
 	Delete(key string)
-	// Namespace returns a namespaced view of the blackboard using prefix"ns:" semantics.
+	// Namespace returns a namespaced view of the blackboard using the prefix "ns:" semantics.
 	Namespace(ns string) Blackboard
-	// Keys returns a snapshot of existing keys.
+	// Keys return a snapshot of existing keys.
 	Keys() []string
 	// MarshalBinary persists the current state into compact binary bytes (default codec: gob).
 	MarshalBinary() ([]byte, error)
@@ -61,7 +61,7 @@ type TickContext struct {
 }
 
 // BehaviorNode is the fundamental interface for behavior tree nodes.
-// Implementations must be stateless w.r.t. shared instances or keep per-agent state in Blackboard/Memory.
+// Implementations must be stateless w.r.t. shared instances or keep a per-agent state in Blackboard/Memory.
 type BehaviorNode interface {
 	// Tick executes one step of the node and returns a Status.
 	// Implementations should avoid panics and return errors via blackboard or wrapping actions if needed.
@@ -96,7 +96,7 @@ type Composite interface {
 type Sensor interface {
 	// Name is used for registry and debugging.
 	Name() string
-	// Update is called each tick cycle to refresh Blackboard state.
+	// Update is called each tick cycle to refresh the Blackboard state.
 	Update(ctx context.Context, bb Blackboard) error
 }
 
@@ -130,15 +130,15 @@ type Agent interface {
 	Blackboard() Blackboard
 	// Memory returns the agent decision memory.
 	Memory() Memory
-	// Events returns the shared event bus.
+	// Events return to the shared event bus.
 	Events() bus.EventBus
-	// SaveState returns a binary snapshot of agent state (blackboard + memory).
+	// SaveState returns a binary snapshot of the agent state (blackboard and memory).
 	SaveState() ([]byte, error)
-	// LoadState restores agent state from a binary snapshot.
+	// LoadState restores the agent state from a binary snapshot.
 	LoadState(b []byte) error
 }
 
-// DecisionRecord is used by Memory to keep audit logs of decisions and outcomes.
+// DecisionRecord is a record of a decision made by a behavior tree node. It is used by Memory to keep audit logs of decisions and outcomes.
 type DecisionRecord struct {
 	Node      string          `json:"node"`
 	Status    Status          `json:"status"`

@@ -90,7 +90,7 @@ func TestPersistenceTopics(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	b2 := New()
-	if err := b2.LoadState(data); err != nil {
+	if err = b2.LoadState(data); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	names := map[string]bool{}
