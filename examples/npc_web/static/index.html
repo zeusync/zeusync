@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NPC Web Demo</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="panel">
+    <h1>Робот-исследователь — демо</h1>
+    <div class="controls">
+      <button id="restartBtn">Перезапуск</button>
+      <span id="status"></span>
+      <span id="stats"></span>
+    </div>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><span class="swatch sw-empty"></span> Пусто</div>
+    <div class="legend-item"><span class="swatch sw-trap"></span> Ловушка (урон)</div>
+    <div class="legend-item"><span class="swatch sw-artifact"></span> Артефакт (+энергия)</div>
+    <div class="legend-item"><span class="swatch sw-exit"></span> Выход (цель)</div>
+    <div class="legend-item"><span class="swatch sw-fog"></span> Туман (осторожнее)</div>
+  </div>
+  <div class="content">
+    <canvas id="canvas" width="880" height="560"></canvas>
+    <div class="log-panel">
+      <div class="log-title">Логи воздействий</div>
+      <ul id="log"></ul>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
