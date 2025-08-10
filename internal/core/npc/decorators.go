@@ -9,7 +9,6 @@ import (
 // Decorator nodes: Repeat, Timer, Probability, Inverter, Succeeder, Cooldown
 
 // Repeat decorator repeats its child a fixed number of times or until failure.
-
 type Repeat struct {
 	baseNode
 	child BehaviorNode
@@ -44,12 +43,11 @@ func (r *Repeat) Tick(t TickContext) (Status, error) {
 }
 
 // Timer decorator limits child execution by duration; returns Running until timeout, then child's status.
-
 type Timer struct {
 	baseNode
 	child    BehaviorNode
 	Duration time.Duration
-	// in Blackboard, we store start time under key name+".start"
+	// in Blackboard, we store start time under the key name+".start"
 }
 
 func NewTimer(name string, d time.Duration) *Timer {
@@ -112,7 +110,6 @@ func (p *Probability) Tick(t TickContext) (Status, error) {
 }
 
 // Inverter decorator flips Success <-> Failure; Running passes through.
-
 type Inverter struct {
 	baseNode
 	child BehaviorNode
@@ -138,7 +135,6 @@ func (d *Inverter) Tick(t TickContext) (Status, error) {
 }
 
 // Succeeder decorator always returns Success unless Running; Running passes through.
-
 type Succeeder struct {
 	baseNode
 	child BehaviorNode
@@ -159,10 +155,9 @@ func (d *Succeeder) Tick(t TickContext) (Status, error) {
 	return StatusSuccess, err
 }
 
-// Cooldown decorator prevents executing child until a duration elapsed since last allowed run.
+// Cooldown decorator prevents executing a child until a duration elapsed since the last allowed run.
 // If cooling down, returns Failure so selectors can try alternatives.
-// Params: Duration; SuccessOnly (when true, only set cooldown after child succeeded).
-
+// Params: Duration; SuccessOnly (when true, only set cooldown after the child succeeded).
 type Cooldown struct {
 	baseNode
 	child       BehaviorNode
@@ -201,4 +196,80 @@ func (d *Cooldown) Tick(t TickContext) (Status, error) {
 		}
 	}
 	return st, err
+}
+
+// UntilSuccess repeats the child until it returns Success or until maxAttempts (0 => infinite)
+// Returns Running if the child returns Running; Failure only if exceeded maxAttempts (>0) without success.
+type UntilSuccess struct {
+	baseNode
+	child       BehaviorNode
+	MaxAttempts int
+}
+
+func NewUntilSuccess(name string, max int) *UntilSuccess {
+	return &UntilSuccess{baseNode: baseNode{name: name}, MaxAttempts: max}
+}
+
+func (d *UntilSuccess) SetChild(child BehaviorNode) { d.child = child }
+
+func (d *UntilSuccess) Tick(t TickContext) (Status, error) {
+	if d.child == nil {
+		return StatusFailure, errors.New("until-success: child is nil")
+	}
+	attempts := 0
+	for {
+		st, err := d.child.Tick(t)
+		if err != nil {
+			return StatusFailure, err
+		}
+		switch st {
+		case StatusSuccess:
+			return StatusSuccess, nil
+		case StatusRunning:
+			return StatusRunning, nil
+		default:
+		}
+		attempts++
+		if d.MaxAttempts > 0 && attempts >= d.MaxAttempts {
+			return StatusFailure, nil
+		}
+	}
+}
+
+// UntilFailure repeats the child until it returns Failure or until maxAttempts (0 => infinite)
+// Returns Running if the child returns Running; Success only if exceeded maxAttempts without failure.
+type UntilFailure struct {
+	baseNode
+	child       BehaviorNode
+	MaxAttempts int
+}
+
+func NewUntilFailure(name string, max int) *UntilFailure {
+	return &UntilFailure{baseNode: baseNode{name: name}, MaxAttempts: max}
+}
+
+func (d *UntilFailure) SetChild(child BehaviorNode) { d.child = child }
+
+func (d *UntilFailure) Tick(t TickContext) (Status, error) {
+	if d.child == nil {
+		return StatusFailure, errors.New("until-failure: child is nil")
+	}
+	attempts := 0
+	for {
+		st, err := d.child.Tick(t)
+		if err != nil {
+			return StatusFailure, err
+		}
+		switch st {
+		case StatusFailure:
+			return StatusSuccess, nil
+		case StatusRunning:
+			return StatusRunning, nil
+		default:
+		}
+		attempts++
+		if d.MaxAttempts > 0 && attempts >= d.MaxAttempts {
+			return StatusSuccess, nil
+		}
+	}
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -97,8 +96,9 @@ func (c *Config) Build(reg Registry) (DecisionTree, []Sensor, error) {
 			return sel, nil
 		case "Parallel", "parallel":
 			policy := ParallelRequireAllSuccess
-			if v, ok := nc.Params["policy"]; ok {
-				if s, ok := v.(string); ok && (s == "one" || s == "any") {
+			var v any
+			if v, ok = nc.Params["policy"]; ok {
+				if s, is := v.(string); is && (s == "one" || s == "any") {
 					policy = ParallelRequireOneSuccess
 				}
 			}
@@ -114,8 +114,34 @@ func (c *Config) Build(reg Registry) (DecisionTree, []Sensor, error) {
 			par.SetChildren(children...)
 			created[name] = par
 			return par, nil
+		case "Random", "random":
+			rnd := NewRandom(name)
+			children := make([]BehaviorNode, 0, len(nc.Children))
+			for _, chname := range nc.Children {
+				ch, err := buildNode(chname)
+				if err != nil {
+					return nil, err
+				}
+				children = append(children, ch)
+			}
+			rnd.SetChildren(children...)
+			created[name] = rnd
+			return rnd, nil
+		case "Priority", "priority":
+			prio := NewPriority(name)
+			children := make([]BehaviorNode, 0, len(nc.Children))
+			for _, chname := range nc.Children {
+				ch, err := buildNode(chname)
+				if err != nil {
+					return nil, err
+				}
+				children = append(children, ch)
+			}
+			prio.SetChildren(children...)
+			created[name] = prio
+			return prio, nil
 		case "Decorator", "decorator":
-			// select decorator by name in Action field for simplicity
+			// select the decorator by name in the Action field for simplicity
 			decName, _ := nc.Params["name"].(string)
 			dec, err := reg.NewDecorator(decName, nc.Params)
 			if err != nil {
@@ -156,93 +182,12 @@ func (c *Config) Build(reg Registry) (DecisionTree, []Sensor, error) {
 	// sensors
 	sensors := make([]Sensor, 0, len(c.Sensors))
 	for _, s := range c.Sensors {
-		sen, err := reg.NewSensor(s.Type, s.Params)
+		var sen Sensor
+		sen, err = reg.NewSensor(s.Type, s.Params)
 		if err != nil {
 			return nil, nil, fmt.Errorf("sensor %s: %w", s.Name, err)
 		}
 		sensors = append(sensors, sen)
 	}
 	return Tree{root: root}, sensors, nil
-}
-
-// Built-in basic decorators/actions/conditions for configuration convenience.
-// We register a small set here to make out-of-the-box examples work.
-
-// RegisterBuiltins registers simple reusable nodes into a Registry.
-func RegisterBuiltins(r Registry) {
-	// Conditions
-	r.RegisterCondition("IsTrue", func(params map[string]any) (Condition, error) {
-		key, _ := params["key"].(string)
-		if key == "" {
-			return nil, fmt.Errorf("IsTrue requires 'key'")
-		}
-		return ConditionFunc{baseNode: baseNode{name: "IsTrue(" + key + ")"}, Fn: func(t TickContext) (bool, error) {
-			v, ok := t.BB.Get(key)
-			if !ok {
-				return false, nil
-			}
-			b, ok := v.(bool)
-			return ok && b, nil
-		}}, nil
-	})
-	// Actions
-	r.RegisterAction("SetBool", func(params map[string]any) (Action, error) {
-		key, _ := params["key"].(string)
-		val, _ := params["value"].(bool)
-		if key == "" {
-			return nil, fmt.Errorf("SetBool requires 'key'")
-		}
-		return ActionFunc{baseNode: baseNode{name: "SetBool(" + key + ")"}, Fn: func(t TickContext) (Status, error) {
-			t.BB.Set(key, val)
-			return StatusSuccess, nil
-		}}, nil
-	})
-	r.RegisterAction("Noop", func(params map[string]any) (Action, error) {
-		return ActionFunc{baseNode: baseNode{name: "Noop"}, Fn: func(t TickContext) (Status, error) { return StatusSuccess, nil }}, nil
-	})
-	// Decorators
-	r.RegisterDecorator("Repeat", func(params map[string]any) (Decorator, error) {
-		times := 1
-		if v, ok := params["times"].(int); ok {
-			times = v
-		} else if fv, ok := params["times"].(float64); ok {
-			times = int(fv)
-		}
-		stopOnFailure := false
-		if v, ok := params["stop_on_failure"].(bool); ok {
-			stopOnFailure = v
-		}
-		return NewRepeat("Repeat", times, stopOnFailure), nil
-	})
-	r.RegisterDecorator("Timer", func(params map[string]any) (Decorator, error) {
-		ms := 0
-		if v, ok := params["ms"].(int); ok {
-			ms = v
-		} else if fv, ok := params["ms"].(float64); ok {
-			ms = int(fv)
-		}
-		return NewTimer("Timer", time.Duration(ms)*time.Millisecond), nil
-	})
-	// Inverter
-	r.RegisterDecorator("Inverter", func(params map[string]any) (Decorator, error) {
-		return NewInverter("Inverter"), nil
-	})
-	// Succeeder
-	r.RegisterDecorator("Succeeder", func(params map[string]any) (Decorator, error) {
-		return NewSucceeder("Succeeder"), nil
-	})
-	// Cooldown
-	r.RegisterDecorator("Cooldown", func(params map[string]any) (Decorator, error) {
-		ms := 0
-		if v, ok := params["ms"].(int); ok {
-			ms = v
-		} else if fv, ok := params["ms"].(float64); ok {
-			ms = int(fv)
-		}
-		successOnly := true
-		if v, ok := params["success_only"].(bool); ok {
-			successOnly = v
-		}
-		return NewCooldown("Cooldown", time.Duration(ms)*time.Millisecond, successOnly), nil
-	})
 }

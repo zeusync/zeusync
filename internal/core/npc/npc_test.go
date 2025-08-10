@@ -35,7 +35,6 @@ func TestLoadAndRunSimpleTree(t *testing.T) {
 	}
 	r := NewRegistry()
 	RegisterBuiltins(r)
-	RegisterSensors(r)
 	tree, sensors, err := cfg.Build(r)
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -62,7 +61,6 @@ func TestAgentPersistence(t *testing.T) {
 	}
 	r := NewRegistry()
 	RegisterBuiltins(r)
-	RegisterSensors(r)
 	tree, sensors, err := cfg.Build(r)
 	if err != nil {
 		t.Fatalf("build: %v", err)

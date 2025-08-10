@@ -81,6 +81,7 @@ func (w *World) TileAt(x, y int) Tile {
 	}
 	return w.Grid[y][x]
 }
+
 func (w *World) ClearTile(x, y int) {
 	if w.InBounds(x, y) {
 		w.Grid[y][x] = Empty
@@ -368,6 +369,7 @@ func RememberTrapAction(world *World) npc.Action {
 func ConditionKeyBool(name, key string) npc.Condition {
 	return CondWrap{name: name, fn: func(t npc.TickContext) (bool, error) { return getBool(t.BB, key), nil }}
 }
+
 func IsAtExitCondition(world *World) npc.Condition {
 	return CondWrap{name: "AtExit", fn: func(t npc.TickContext) (bool, error) {
 		return world.TileAt(getInt(t.BB, "pos_x"), getInt(t.BB, "pos_y")) == Exit, nil
