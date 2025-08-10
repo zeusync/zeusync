@@ -32,7 +32,7 @@ func (s *Sequence) Tick(t TickContext) (Status, error) {
 		case StatusRunning:
 			return StatusRunning, nil
 		default:
-			return StatusSuccess, nil
+			// continue to next child
 		}
 	}
 	return StatusSuccess, nil
@@ -63,7 +63,7 @@ func (s *Selector) Tick(t TickContext) (Status, error) {
 		case StatusRunning:
 			return StatusRunning, err
 		default:
-			return StatusFailure, err
+			// try next child
 		}
 	}
 	return StatusFailure, lastErr
