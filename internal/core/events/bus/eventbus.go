@@ -263,11 +263,18 @@ func (b *inMemoryBus) deliver(topic string, event Event) error {
 			}
 		}
 	}
-	obsCount := len(b.observers)
+	// snapshot observers under lock to avoid races
+	var observers []EventBusObserver
+	if len(b.observers) > 0 {
+		observers = make([]EventBusObserver, 0, len(b.observers))
+		for obs := range b.observers {
+			observers = append(observers, obs)
+		}
+	}
 	b.mu.RUnlock()
 
-	if obsCount > 0 {
-		for obs := range b.observers {
+	if len(observers) > 0 {
+		for _, obs := range observers {
 			obs.OnPublish(topic, etype, event)
 		}
 	}
@@ -286,9 +293,9 @@ func (b *inMemoryBus) deliver(topic string, event Event) error {
 		}
 	}
 
-	if obsCount > 0 {
+	if len(observers) > 0 {
 		dur := time.Since(start).Microseconds()
-		for obs := range b.observers {
+		for _, obs := range observers {
 			obs.OnDelivered(topic, etype, len(subs), all, dur)
 		}
 		// update metrics only when observing
